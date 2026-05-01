@@ -1,0 +1,11 @@
+# Security headers para Netlify (Cloudflare Pages también lee este formato).
+# Estos headers son la versión "prod" del CSP que está en vite.config.js para
+# vite preview. Sin esto, el sitio en producción quedaría sin CSP.
+
+/*
+  Content-Security-Policy: default-src 'self'; img-src 'self' data: blob:; media-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'; frame-src 'self' https://www.openstreetmap.org; connect-src 'self' https://script.google.com https://script.googleusercontent.com;
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  Permissions-Policy: camera=(), microphone=(), geolocation=()

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -o /dev/null -w \"Index: HTTP %{http_code}\\\\n\" http://localhost:5174/)",
+      "Bash(curl -s http://localhost:5174/src/utils/api.js)",
+      "Bash(curl -s http://localhost:5174/src/App.jsx)",
+      "Bash(npm run *)"
+    ]
+  }
+}
