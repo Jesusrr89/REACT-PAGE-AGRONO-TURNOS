@@ -1,107 +1,86 @@
 # Agronomía Central — Sitio React
 
-Sitio web oficial del Club S. y D. Agronomía Central, con Portal del Socio
-y sistema de pago de mensualidades.
+Sitio oficial del Club S. y D. Agronomía Central, con Portal del Socio
+y Panel Admin.
 
 ## 🚀 Cómo ejecutarlo
 
-Abrí una terminal DENTRO de esta carpeta (donde está este README) y corré:
-
-```
+```bash
 npm install
 npm run dev
 ```
 
-La terminal te va a mostrar una URL tipo `http://localhost:5173/`.
-Abrila en el navegador.
+La terminal abre `http://localhost:5173/`.
 
-> ⚠️ La terminal tiene que quedar abierta mientras usás el sitio.
+> ⚠️ Necesitás Node.js 18+ ([nodejs.org](https://nodejs.org), versión LTS).
 
-## 📦 Requisitos
+## 🔧 Setup inicial (una vez)
 
-- Node.js 18 o superior: https://nodejs.org (instalá la versión LTS)
+El backend corre sobre **Supabase** (Postgres + Auth + Edge Functions).
 
-## 🎯 Novedades
-
-### Login — "Soy Jugador Agronomo"
-Hacé clic en el botón de la navbar o del hero para ingresar con tu usuario.
-El portal te muestra:
-- Tu carnet digital con nombre, dorsal y categoría
-- Tu estado actual (al día / con deuda)
-- Historial de cuotas con montos y fechas de pago
-- Monto total adeudado (si tenés deuda)
-
-### 👤 Acceso de prueba
-
-| Email            | Contraseña |
-|------------------|------------|
-| `test@test.com`  | `1234`     |
-
-Este usuario accede al portal como "Jugador Agronomo" (dorsal #37) con
-cuotas pendientes, para que puedas ver cómo funciona la sección de pagos.
-
-### 💳 Métodos de pago
-
-- **Transferencia bancaria** con CBU y alias (se copian al portapapeles)
-- **Mercado Pago** (alias + botón, marcado como "Recomendado")
-- **Efectivo en el club** (con dirección y horarios)
-- **Débito automático** (adhesión por secretaría)
-
-## 🔧 Comandos disponibles
-
-- `npm install` — instala las dependencias (solo la primera vez)
-- `npm run dev` — servidor de desarrollo con recarga automática
-- `npm run build` — genera la versión de producción
-- `npm run preview` — sirve la producción con headers de seguridad completos
+1. Crear proyecto en [supabase.com](https://supabase.com) (free tier alcanza).
+2. Aplicar el schema y crear el primer admin → ver [`supabase/README.md`](./supabase/README.md).
+3. Configurar `.env` con `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY`.
+4. Deployar la Edge Function `invite-socio` (paso 5 del README de Supabase).
 
 ## 📁 Estructura
 
 ```
 ac-react/
-├── public/
-│   ├── favicon.svg
-│   └── media/           ← fotos y videos del club (incl. logo)
+├── public/                  ← assets estáticos (logo, fotos)
 ├── src/
-│   ├── App.jsx          ← todos los componentes
-│   ├── main.jsx         ← punto de entrada
-│   ├── styles/
-│   │   └── global.css   ← estilos completos
+│   ├── App.jsx              ← componentes de la SPA
+│   ├── main.jsx             ← entry point
+│   ├── styles/global.css    ← estilos
 │   └── utils/
-│       └── security.js  ← sanitización + validación + rate limit
+│       ├── supabase.js      ← cliente Supabase
+│       ├── api.js           ← wrappers (login, sesión, helpers)
+│       ├── session.js       ← persistencia local del socio
+│       └── security.js      ← validaciones de inputs
+├── supabase/
+│   ├── migrations/          ← SQL del schema (tablas + RLS + triggers)
+│   ├── seed.sql             ← config inicial del club
+│   ├── functions/           ← Edge Functions
+│   │   └── invite-socio/    ← crea sockets + manda mail de invitación
+│   └── README.md            ← setup paso a paso
+├── apps-script-legacy/      ← backend viejo en Google Apps Script (referencia)
 ├── index.html
-├── package.json
-└── vite.config.js
+└── package.json
 ```
 
-## 🔒 Seguridad del login
+## 🎯 Funcionalidad
 
-- **Rate-limiter** contra fuerza bruta (2 segundos de cooldown por intento)
-- **Sanitización** del usuario antes de buscar en la "base de datos"
-- **Validación de longitud** para evitar inputs absurdamente largos
-- **Escape de HTML** en todos los campos del sistema
-- Modal con `aria-modal` y cerrado por tecla ESC (accesibilidad)
+### Portal del socio (`/`)
+- Login con email/contraseña (Supabase Auth)
+- Carnet digital (nombre, dorsal, categoría, estado de cuenta)
+- Historial de cuotas con saldo, recargos, fechas
+- Métodos de pago: transferencia bancaria, WhatsApp al club
+- Reset de contraseña por mail
 
-> ⚠️ **Importante para producción**: este sistema de login es un prototipo
-> funcional. Para usar en producción real, es IMPRESCINDIBLE:
-> 1. Mover la autenticación a un backend con HTTPS
-> 2. Guardar las contraseñas hasheadas con bcrypt/argon2 (nunca en texto plano)
-> 3. Usar JWT o sesiones firmadas con HttpOnly cookies
-> 4. Implementar CSRF tokens en endpoints que modifican datos
-> 5. Rate-limit server-side con captcha tras N intentos fallidos
-> 6. Conectar con el sistema real de facturación del club
+### Panel admin
+Acceso con un usuario que tenga `role='admin'` en `profiles`.
 
-## 🔒 Seguridad general
+Pestañas:
+- **Resumen** — KPIs (socios activos, al día, con deuda, cobrado del mes)
+- **Socios** — listado con buscador y filtros, crear nuevo socio (manda invitación), desactivar/reactivar, marcar pagos manuales
+- **Cuotas** — quién está al día / con deuda, marcar pagado en bulk
+- **Pagos** — audit trail de todas las operaciones
+- **Configuración** — CBU, alias, WhatsApp, montos del cron, etc.
 
-- Headers de seguridad en producción: CSP, X-Frame-Options, HSTS, Referrer-Policy
-- Iframe del mapa con `sandbox`
-- `noopener noreferrer` en links externos
-- Formularios con validación + sanitización anti-XSS
+## 🔧 Comandos
 
-## 📱 Responsive
+- `npm run dev` — servidor de desarrollo con recarga automática
+- `npm run build` — versión de producción en `dist/`
+- `npm run preview` — sirve la prod con headers de seguridad
 
-Mobile-first con breakpoints en 480/640/820/900/1024/1100 px.
-El portal del socio, la tabla de cuotas y el modal de login están optimizados
-para pantallas chicas.
+## 🔒 Seguridad
+
+- **Auth**: Supabase Auth (PBKDF2, sesiones JWT, refresh automático).
+- **RLS**: cada socio solo ve su fila en `profiles` y sus cuotas/pagos. Admin ve todo.
+- **Edge Function `invite-socio`**: el `service_role` nunca toca el browser.
+- **Headers de prod**: CSP, X-Frame-Options, HSTS, Referrer-Policy
+  (`vercel.json` para Vercel, `public/_headers` para Netlify).
+- Iframes con `sandbox`, links externos con `noopener noreferrer`.
 
 ## 📞 Datos del club
 

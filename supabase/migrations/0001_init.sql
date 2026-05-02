@@ -3,29 +3,18 @@
 -- ============================================================================
 -- Tablas: profiles, cuotas, pagos, config
 -- Auth la maneja Supabase Auth (auth.users). profiles extiende esa tabla.
+--
+-- Importante: profiles se define ANTES de is_admin() porque las funciones
+-- `language sql` validan su cuerpo al crearse y necesitan que las tablas
+-- referenciadas ya existan.
 -- ============================================================================
-
--- Helper: chequea si el usuario actual es admin.
--- SECURITY DEFINER evita la recursión infinita cuando se usa dentro de RLS
--- policies sobre la propia tabla profiles.
-create or replace function public.is_admin()
-returns boolean
-language sql
-security definer
-stable
-set search_path = public
-as $$
-  select coalesce(
-    (select role = 'admin' from public.profiles where id = auth.uid()),
-    false
-  );
-$$;
 
 -- ============================================================================
 -- profiles
 -- ============================================================================
 create table if not exists public.profiles (
   id              uuid primary key references auth.users(id) on delete cascade,
+  email           text,
   numero_socio    text unique,
   nombre          text not null,
   dni             text unique,
@@ -44,6 +33,25 @@ create table if not exists public.profiles (
 create index if not exists profiles_estado_idx   on public.profiles (estado);
 create index if not exists profiles_role_idx     on public.profiles (role);
 create index if not exists profiles_nombre_idx   on public.profiles (lower(nombre));
+
+-- ============================================================================
+-- Helper: chequea si el usuario actual es admin.
+-- SECURITY DEFINER evita la recursión infinita cuando se usa dentro de RLS
+-- policies sobre la propia tabla profiles.
+-- Se define DESPUÉS de profiles porque language sql valida al crearse.
+-- ============================================================================
+create or replace function public.is_admin()
+returns boolean
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select coalesce(
+    (select role = 'admin' from public.profiles where id = auth.uid()),
+    false
+  );
+$$;
 
 -- ============================================================================
 -- cuotas
@@ -177,10 +185,11 @@ set search_path = public
 as $$
 begin
   insert into public.profiles (
-    id, nombre, dni, dorsal, categoria, telefono, role, numero_socio
+    id, email, nombre, dni, dorsal, categoria, telefono, role, numero_socio
   )
   values (
     new.id,
+    new.email,
     coalesce(new.raw_user_meta_data->>'nombre', split_part(new.email, '@', 1)),
     nullif(new.raw_user_meta_data->>'dni', ''),
     (new.raw_user_meta_data->>'dorsal')::int,

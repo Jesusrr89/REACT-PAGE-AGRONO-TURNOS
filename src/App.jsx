@@ -20,7 +20,7 @@ import {
   describeError
 } from './utils/api.js';
 import { saveSession, loadSession, clearSession } from './utils/session.js';
-import { supabase } from './utils/supabase.js';
+import { supabase, initialAuthIntent } from './utils/supabase.js';
 
 // ============================================================
 // LOGO del club (imagen real)
@@ -272,7 +272,92 @@ function LoginModal({ open, onClose, onLogin, onSwitchToReset }) {
 }
 
 // ============================================================
-// RESET PASSWORD MODAL — pedir código por mail y cambiar contraseña
+// SET PASSWORD MODAL — para socios que vienen por link de invite o recovery
+// ============================================================
+function SetPasswordModal({ open, intent, onSuccess }) {
+  const [pass, setPass] = useState('');
+  const [pass2, setPass2] = useState('');
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    document.body.style.overflow = open ? 'hidden' : '';
+    return () => { document.body.style.overflow = ''; };
+  }, [open]);
+
+  if (!open) return null;
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (!pass || pass.length < 8) {
+      setError('La contraseña tiene que tener al menos 8 caracteres.');
+      return;
+    }
+    if (pass !== pass2) {
+      setError('Las contraseñas no coinciden.');
+      return;
+    }
+    setSubmitting(true);
+    const { error: err } = await supabase.auth.updateUser({ password: pass });
+    if (err) {
+      setError(err.message || 'No pudimos guardar la contraseña. Pedí un nuevo link.');
+      setSubmitting(false);
+      return;
+    }
+    onSuccess();
+  };
+
+  const titulo = intent === 'recovery' ? 'Restablecé tu contraseña' : '¡Bienvenido al club!';
+  const sub = intent === 'recovery'
+    ? 'Elegí una nueva contraseña para entrar al portal.'
+    : 'Para terminar tu alta, elegí una contraseña que vas a usar para entrar al portal.';
+
+  return (
+    <div className="modal" role="dialog" aria-modal="true">
+      <div className="modal__box" onClick={(e) => e.stopPropagation()}>
+        <div className="modal__header">
+          <img src="/media/logo.jpeg" alt="AC" className="modal__logo" />
+          <h2>{titulo}</h2>
+          <p>{sub}</p>
+        </div>
+        <form className="modal__form" onSubmit={handleSubmit} noValidate>
+          <div className="modal__field">
+            <label htmlFor="set-pass">Nueva contraseña</label>
+            <input
+              id="set-pass"
+              type="password"
+              value={pass}
+              onChange={(e) => setPass(e.target.value)}
+              maxLength={100}
+              autoFocus
+              autoComplete="new-password"
+              placeholder="Mínimo 8 caracteres"
+            />
+          </div>
+          <div className="modal__field">
+            <label htmlFor="set-pass2">Repetí la contraseña</label>
+            <input
+              id="set-pass2"
+              type="password"
+              value={pass2}
+              onChange={(e) => setPass2(e.target.value)}
+              maxLength={100}
+              autoComplete="new-password"
+            />
+          </div>
+          {error && <div className="modal__error">{error}</div>}
+          <button type="submit" className="modal__submit" disabled={submitting}>
+            {submitting ? 'Guardando...' : 'Guardar y entrar'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// RESET PASSWORD MODAL — pedir mail de recovery
 // ============================================================
 function ResetPasswordModal({ open, onClose, onSwitchToLogin }) {
   const [step, setStep] = useState('request'); // request | confirm | success
@@ -1269,16 +1354,6 @@ function PaymentMethods({ config = {} }) {
 // ============================================================
 // PORTAL ADMIN — vista para la secretaría / dirigentes del club
 // ============================================================
-// Cobranza histórica simulada (últimos 6 meses)
-const ADMIN_CHART_DATA = [
-  { mes: 'Nov 25', recaudado: 720000, adeudado: 480000 },
-  { mes: 'Dic 25', recaudado: 880000, adeudado: 320000 },
-  { mes: 'Ene 26', recaudado: 920000, adeudado: 280000 },
-  { mes: 'Feb 26', recaudado: 850000, adeudado: 350000 },
-  { mes: 'Mar 26', recaudado: 950000, adeudado: 250000 },
-  { mes: 'Abr 26', recaudado: 960000, adeudado: 345000 }
-];
-
 const ADMIN_CONFIG_DEFAULT = {
   cuota_monto_base: '15000',
   cuota_dia_vencimiento: '10',
@@ -1334,11 +1409,84 @@ function PortalAdmin({ onLogout }) {
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 25;
   const [showNewModal, setShowNewModal] = useState(false);
-  const [pausaSocio, setPausaSocio] = useState(null);
   const [detalleSocio, setDetalleSocio] = useState(null);
+  const [editSocio, setEditSocio] = useState(null);
+  const [addCuotaFor, setAddCuotaFor] = useState(null);
+  const [generandoCuotas, setGenerandoCuotas] = useState(false);
   const [toast, setToast] = useState('');
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(''), 2800); };
+
+  // Carga inicial: socios + cuotas + pagos + config desde Supabase.
+  // Las RLS policies tiran error si el usuario no es admin — eso lo capturamos
+  // y mostramos un mensaje claro.
+  const reloadAll = async () => {
+    setLoading(true);
+    setLoadError('');
+    const [profilesRes, cuotasRes, pagosRes, configRes] = await Promise.all([
+      supabase.from('profiles').select('*').neq('role', 'admin').order('nombre'),
+      supabase.from('cuotas').select('*'),
+      supabase.from('pagos').select('*').order('fecha', { ascending: false }),
+      supabase.from('config').select('key, value')
+    ]);
+
+    const firstErr = [profilesRes, cuotasRes, pagosRes, configRes].find((r) => r.error);
+    if (firstErr) {
+      setLoadError('No pudimos cargar los datos: ' + firstErr.error.message);
+      setLoading(false);
+      return;
+    }
+
+    // Index cuotas por socio para calcular adeuda y último pago.
+    const cuotasBySocio = new Map();
+    for (const c of cuotasRes.data || []) {
+      if (!cuotasBySocio.has(c.socio_id)) cuotasBySocio.set(c.socio_id, []);
+      cuotasBySocio.get(c.socio_id).push(c);
+    }
+
+    const sociosShaped = (profilesRes.data || []).map((p) => {
+      const cs = cuotasBySocio.get(p.id) || [];
+      const adeuda = cs.reduce((s, c) => s + Number(c.saldo || 0), 0);
+      const fechasPago = cs.map((c) => c.fecha_pago).filter(Boolean).sort();
+      const ultFecha = fechasPago[fechasPago.length - 1];
+      return {
+        socio_id: p.numero_socio || p.id.slice(0, 8),
+        profile_id: p.id,
+        nombre: p.nombre,
+        email: p.email || '',
+        dorsal: p.dorsal != null ? String(p.dorsal) : '',
+        categoria: p.categoria || '',
+        telefono: p.telefono || '',
+        estado: p.estado,
+        adeuda,
+        ultPago: ultFecha ? new Date(ultFecha).toLocaleDateString('es-AR') : '—'
+      };
+    });
+    setSocios(sociosShaped);
+
+    // Pagos: enriquecer con nombre del socio (lookup por profile_id).
+    const nombreById = new Map(sociosShaped.map((s) => [s.profile_id, s.nombre]));
+    const sidById = new Map(sociosShaped.map((s) => [s.profile_id, s.socio_id]));
+    setPagos((pagosRes.data || []).map((p) => ({
+      fecha: new Date(p.fecha).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }),
+      fecha_iso: p.fecha,
+      socio_id: sidById.get(p.socio_id) || '—',
+      socio: nombreById.get(p.socio_id) || '—',
+      monto: Number(p.monto),
+      metodo: p.metodo,
+      estado: p.estado,
+      ref: p.referencia || '—'
+    })));
+
+    // Config: clave/valor.
+    const cfg = { ...ADMIN_CONFIG_DEFAULT };
+    for (const r of configRes.data || []) cfg[r.key] = r.value || '';
+    setConfig(cfg);
+
+    setLoading(false);
+  };
+
+  useEffect(() => { reloadAll(); }, []);
 
   // KPIs derivados
   const totalSocios = socios.length;
@@ -1346,71 +1494,250 @@ function PortalAdmin({ onLogout }) {
   const sociosAlDia = socios.filter((s) => s.estado === 'activo' && s.adeuda === 0).length;
   const sociosConDeuda = socios.filter((s) => s.estado === 'activo' && s.adeuda > 0).length;
   const totalAdeudado = socios.reduce((s, x) => s + (x.adeuda || 0), 0);
+  const ahora = new Date();
+  const mesActualPrefix = ahora.getFullYear() + '-' + String(ahora.getMonth() + 1).padStart(2, '0');
   const cobradoMes = pagos
-    .filter((p) => p.estado === 'confirmado' && p.fecha.indexOf('2026-04') === 0)
+    .filter((p) => p.estado === 'confirmado' && (p.fecha_iso || '').startsWith(mesActualPrefix))
     .reduce((s, p) => s + p.monto, 0);
   const pctAlDia = sociosActivos > 0 ? Math.round((sociosAlDia / sociosActivos) * 100) : 0;
+  const nombreMesActual = ahora.toLocaleDateString('es-AR', { month: 'long' });
 
-  const aprobarSolicitud = (sid) => {
-    const sol = solicitudes.find((s) => s.socio_id === sid);
-    if (!sol) return;
-    setSocios((p) => [...p, {
-      socio_id: sol.socio_id, nombre: sol.nombre, dorsal: '',
-      categoria: sol.categoria, estado: 'activo', adeuda: 0,
-      ultPago: '—', telefono: sol.telefono, email: sol.email
-    }]);
-    setSolicitudes((p) => p.filter((s) => s.socio_id !== sid));
-    showToast('✓ Solicitud aprobada — ' + sol.nombre);
-  };
-  const rechazarSolicitud = (sid) => {
-    const sol = solicitudes.find((s) => s.socio_id === sid);
-    setSolicitudes((p) => p.filter((s) => s.socio_id !== sid));
-    if (sol) showToast('Solicitud rechazada — ' + sol.nombre);
-  };
-  const desactivarSocio = (sid) => {
+  const findSocio = (sid) => socios.find((s) => s.socio_id === sid);
+
+  const desactivarSocio = async (sid) => {
+    const socio = findSocio(sid);
+    if (!socio) return;
+    const { error } = await supabase.from('profiles').update({ estado: 'desactivado' }).eq('id', socio.profile_id);
+    if (error) return showToast('Error: ' + error.message);
     setSocios((p) => p.map((s) => s.socio_id === sid ? { ...s, estado: 'desactivado' } : s));
     showToast('Socio desactivado');
   };
-  const reactivarSocio = (sid) => {
+
+  const reactivarSocio = async (sid) => {
+    const socio = findSocio(sid);
+    if (!socio) return;
+    const { error } = await supabase.from('profiles').update({ estado: 'activo' }).eq('id', socio.profile_id);
+    if (error) return showToast('Error: ' + error.message);
     setSocios((p) => p.map((s) => s.socio_id === sid ? { ...s, estado: 'activo' } : s));
     showToast('Socio reactivado');
   };
-  const marcarCuotaPagada = (sid) => {
-    const socio = socios.find((s) => s.socio_id === sid);
+
+  // Marca como pagadas TODAS las cuotas pendientes del socio en una sola operación
+  // y registra una fila en `pagos` como audit trail.
+  const marcarCuotaPagada = async (sid) => {
+    const socio = findSocio(sid);
     if (!socio || socio.adeuda === 0) return;
-    setSocios((p) => p.map((s) => s.socio_id === sid
-      ? { ...s, adeuda: 0, ultPago: new Date().toLocaleDateString('es-AR') }
-      : s));
-    setPagos((p) => [{
-      fecha: new Date().toISOString().slice(0, 16).replace('T', ' '),
-      socio_id: sid, socio: socio.nombre, monto: socio.adeuda,
-      metodo: 'manual', estado: 'confirmado', ref: 'admin-' + Date.now()
-    }, ...p]);
-    showToast('Pago de $' + socio.adeuda.toLocaleString('es-AR') + ' registrado');
-  };
-  const crearSocio = (data) => {
-    const nextId = 'AC-' + ('0000' + (socios.length + solicitudes.length + 1)).slice(-4);
-    setSocios((p) => [...p, {
-      socio_id: nextId, nombre: data.nombre, dorsal: data.dorsal || '',
-      categoria: data.categoria, estado: 'activo', adeuda: 0, ultPago: '—',
-      telefono: data.telefono, email: data.email
-    }]);
-    setShowNewModal(false);
-    showToast('✓ Socio creado: ' + nextId);
+
+    // Traer las cuotas pendientes del socio
+    const { data: pendientes, error: e1 } = await supabase
+      .from('cuotas')
+      .select('id, monto, recargo, monto_pagado, total_a_cobrar')
+      .eq('socio_id', socio.profile_id)
+      .neq('estado', 'pagado');
+    if (e1) return showToast('Error: ' + e1.message);
+    if (!pendientes || pendientes.length === 0) return;
+
+    // Update cada cuota: monto_pagado = total_a_cobrar
+    const updates = await Promise.all(
+      pendientes.map((c) =>
+        supabase.from('cuotas').update({ monto_pagado: Number(c.total_a_cobrar) }).eq('id', c.id)
+      )
+    );
+    const failed = updates.find((r) => r.error);
+    if (failed) return showToast('Error: ' + failed.error.message);
+
+    // Audit trail en pagos
+    const monto = socio.adeuda;
+    await supabase.from('pagos').insert({
+      socio_id: socio.profile_id,
+      monto,
+      metodo: 'manual',
+      referencia: 'admin-' + Date.now(),
+      cuotas_cubiertas: pendientes.map((c) => c.id),
+      estado: 'confirmado',
+      fecha_confirmacion: new Date().toISOString(),
+      notas: 'Pago manual registrado desde el panel admin'
+    });
+
+    showToast('Pago de $' + monto.toLocaleString('es-AR') + ' registrado');
+    reloadAll();
   };
 
-  const aplicarPausa = (sid, datos) => {
-    setPausas((p) => ({ ...p, [sid]: datos }));
-    setPausaSocio(null);
-    showToast('Cuota pausada de ' + datos.desde + ' a ' + datos.hasta);
-  };
-  const quitarPausa = (sid) => {
-    setPausas((p) => {
-      const next = { ...p };
-      delete next[sid];
-      return next;
+  const crearSocio = async (data) => {
+    // Llama a la Edge Function `invite-socio` que crea el auth.user + profile
+    // y manda mail de invitación. Ver supabase/functions/invite-socio/.
+    const { data: res, error } = await supabase.functions.invoke('invite-socio', {
+      body: {
+        email: data.email,
+        nombre: data.nombre,
+        dni: data.dni || null,
+        dorsal: data.dorsal ? Number(data.dorsal) : null,
+        categoria: data.categoria || null,
+        telefono: data.telefono || null,
+        numero_socio: data.numero_socio || null
+      }
     });
-    showToast('Pausa removida — el socio vuelve a generar cuota');
+    if (error || (res && res.error)) {
+      return showToast('Error al crear socio: ' + (res?.error || error?.message || 'desconocido'));
+    }
+    setShowNewModal(false);
+    showToast('✓ Socio creado y mail de invitación enviado');
+    reloadAll();
+  };
+
+  const editarSocio = async (data) => {
+    if (!editSocio) return;
+    const updates = {
+      nombre: data.nombre,
+      telefono: data.telefono || null,
+      dorsal: data.dorsal ? Number(data.dorsal) : null,
+      categoria: data.categoria || null,
+      numero_socio: data.numero_socio || null
+    };
+    if (data.dni) updates.dni = data.dni;
+    const { error } = await supabase.from('profiles').update(updates).eq('id', editSocio.profile_id);
+    if (error) return showToast('Error: ' + error.message);
+    showToast('✓ Socio actualizado');
+    setEditSocio(null);
+    reloadAll();
+  };
+
+  // Marca una cuota específica como totalmente pagada + audit trail.
+  const marcarCuotaPagadaIndividual = async (cuotaId) => {
+    const { data: c, error: e1 } = await supabase
+      .from('cuotas').select('id, socio_id, total_a_cobrar, monto_pagado').eq('id', cuotaId).single();
+    if (e1 || !c) return showToast('Error: ' + (e1?.message || 'cuota no encontrada'));
+    const aPagar = Number(c.total_a_cobrar) - Number(c.monto_pagado);
+    if (aPagar <= 0) return;
+
+    const { error: e2 } = await supabase
+      .from('cuotas').update({ monto_pagado: Number(c.total_a_cobrar) }).eq('id', cuotaId);
+    if (e2) return showToast('Error: ' + e2.message);
+
+    await supabase.from('pagos').insert({
+      socio_id: c.socio_id,
+      monto: aPagar,
+      metodo: 'manual',
+      referencia: 'admin-' + Date.now(),
+      cuotas_cubiertas: [cuotaId],
+      estado: 'confirmado',
+      fecha_confirmacion: new Date().toISOString(),
+      notas: 'Cuota marcada pagada desde el panel admin'
+    });
+    showToast('✓ Cuota marcada como pagada');
+    reloadAll();
+  };
+
+  // Pago parcial — suma `monto` a monto_pagado (sin pasarse del total).
+  const pagoParcial = async (cuotaId, monto) => {
+    const { data: c, error: e1 } = await supabase
+      .from('cuotas').select('id, socio_id, total_a_cobrar, monto_pagado').eq('id', cuotaId).single();
+    if (e1 || !c) return showToast('Error: ' + (e1?.message || 'cuota no encontrada'));
+
+    const total = Number(c.total_a_cobrar);
+    const yaPagado = Number(c.monto_pagado);
+    const nuevoTotal = Math.min(yaPagado + Number(monto), total);
+    const aplicado = nuevoTotal - yaPagado;
+    if (aplicado <= 0) return showToast('La cuota ya está cubierta.');
+
+    const { error: e2 } = await supabase
+      .from('cuotas').update({ monto_pagado: nuevoTotal }).eq('id', cuotaId);
+    if (e2) return showToast('Error: ' + e2.message);
+
+    await supabase.from('pagos').insert({
+      socio_id: c.socio_id,
+      monto: aplicado,
+      metodo: 'manual',
+      referencia: 'admin-parcial-' + Date.now(),
+      cuotas_cubiertas: [cuotaId],
+      estado: 'confirmado',
+      fecha_confirmacion: new Date().toISOString(),
+      notas: 'Pago parcial registrado desde el panel admin'
+    });
+    showToast('✓ Pago parcial de $' + aplicado.toLocaleString('es-AR') + ' registrado');
+    reloadAll();
+  };
+
+  // Crea una cuota one-off (multa, inscripción, ajuste).
+  const agregarCuota = async ({ mes, anio, monto, fecha_vencimiento }) => {
+    if (!addCuotaFor) return;
+    const { error } = await supabase.from('cuotas').insert({
+      socio_id: addCuotaFor.profile_id,
+      mes, anio, monto,
+      fecha_vencimiento
+    });
+    if (error) {
+      const msg = error.message.includes('cuotas_socio_id_anio_mes_key')
+        ? 'Ya existe una cuota para ese mes/año.'
+        : error.message;
+      return showToast('Error: ' + msg);
+    }
+    showToast('✓ Cuota agregada');
+    setAddCuotaFor(null);
+    reloadAll();
+  };
+
+  // Genera cuota del mes en curso para todos los activos que no la tengan.
+  const generarCuotasDelMes = async () => {
+    setGenerandoCuotas(true);
+    const ahora = new Date();
+    const mes = ahora.getMonth() + 1;
+    const anio = ahora.getFullYear();
+    const monto = Number(config.cuota_monto_base) || 15000;
+    const dia = Math.max(1, Math.min(28, Number(config.cuota_dia_vencimiento) || 10));
+    const fechaVenc = `${anio}-${String(mes).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
+
+    // Activos sin cuota para ese mes
+    const activos = socios.filter((s) => s.estado === 'activo');
+    const { data: yaTienen } = await supabase
+      .from('cuotas').select('socio_id')
+      .eq('mes', mes).eq('anio', anio);
+    const yaSet = new Set((yaTienen || []).map((c) => c.socio_id));
+    const faltan = activos.filter((s) => !yaSet.has(s.profile_id));
+
+    if (faltan.length === 0) {
+      setGenerandoCuotas(false);
+      return showToast('Todos los socios activos ya tienen cuota para este mes.');
+    }
+
+    const rows = faltan.map((s) => ({
+      socio_id: s.profile_id,
+      mes, anio, monto,
+      fecha_vencimiento: fechaVenc
+    }));
+    const { error } = await supabase.from('cuotas').insert(rows);
+    setGenerandoCuotas(false);
+    if (error) return showToast('Error: ' + error.message);
+    showToast(`✓ Generadas ${faltan.length} cuotas para ${anio}-${String(mes).padStart(2, '0')}`);
+    reloadAll();
+  };
+
+  // Reenvía mail de invitación (mismo Edge Function: si el user ya existe
+  // pero no confirmó, Supabase manda un nuevo mail).
+  const reenviarInvitacion = async (socioRef) => {
+    const target = socioRef || detalleSocio;
+    if (!target) return;
+    const { data: res, error } = await supabase.functions.invoke('invite-socio', {
+      body: {
+        email: target.email,
+        nombre: target.nombre,
+        resend: true
+      }
+    });
+    if (error || (res && res.error)) {
+      return showToast('Error al reenviar: ' + (res?.error || error?.message || 'desconocido'));
+    }
+    showToast('✓ Invitación reenviada');
+  };
+
+  // Anula un pago: marca el pago como 'anulado'. La admin debe ajustar
+  // las cuotas afectadas a mano (mostramos un mensaje claro).
+  const anularPago = async (pagoIso) => {
+    if (!confirm('¿Seguro que querés anular este pago? Vas a tener que ajustar las cuotas a mano.')) return;
+    const { error } = await supabase.from('pagos').update({ estado: 'anulado' }).eq('fecha', pagoIso);
+    if (error) return showToast('Error: ' + error.message);
+    showToast('✓ Pago anulado. Revisá las cuotas afectadas.');
+    reloadAll();
   };
 
   const exportSocios = () => {
@@ -1429,36 +1756,21 @@ function PortalAdmin({ onLogout }) {
     const rows = socios.map((s) => ({
       socio_id: s.socio_id, nombre: s.nombre, categoria: s.categoria,
       adeuda: s.adeuda, estado: s.adeuda > 0 ? 'con deuda' : 'al dia',
-      ultimo_pago: s.ultPago, en_pausa: pausas[s.socio_id] ? 'si' : 'no'
+      ultimo_pago: s.ultPago
     }));
     downloadCSV('cuotas.csv',
-      ['socio_id', 'nombre', 'categoria', 'adeuda', 'estado', 'ultimo_pago', 'en_pausa'],
+      ['socio_id', 'nombre', 'categoria', 'adeuda', 'estado', 'ultimo_pago'],
       rows);
     showToast('✓ cuotas.csv descargado');
   };
 
-  const guardarConfig = (nueva) => {
+  const guardarConfig = async (nueva) => {
+    // Upsert clave por clave en la tabla config.
+    const rows = Object.entries(nueva).map(([key, value]) => ({ key, value: String(value ?? '') }));
+    const { error } = await supabase.from('config').upsert(rows, { onConflict: 'key' });
+    if (error) return showToast('Error: ' + error.message);
     setConfig(nueva);
-    showToast('✓ Configuración guardada (en demo solo en memoria)');
-  };
-
-  const importarSocios = (rows) => {
-    // rows: [{ nombre, email, dni, telefono, categoria }]
-    const start = socios.length + solicitudes.length;
-    const nuevos = rows.map((r, i) => ({
-      socio_id: 'AC-' + ('0000' + (start + i + 1)).slice(-4),
-      nombre: r.nombre || '',
-      dorsal: r.dorsal || '',
-      categoria: r.categoria || '3ra División',
-      estado: 'activo',
-      adeuda: 0,
-      ultPago: '—',
-      telefono: r.telefono || '',
-      email: r.email || ''
-    })).filter((s) => s.nombre && s.email);
-    setSocios((p) => [...p, ...nuevos]);
-    showToast('✓ Importados ' + nuevos.length + ' socio(s)');
-    setTab('socios');
+    showToast('✓ Configuración guardada');
   };
 
   // Reset de paginación al cambiar filtros / búsqueda
@@ -1480,13 +1792,18 @@ function PortalAdmin({ onLogout }) {
 
   return (
     <section id="admin" className="admin">
-      <div className="admin__demo-banner">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-        <span><strong>Modo Demo —</strong> los datos son de ejemplo. En producción se conecta con la base real del club.</span>
-      </div>
-
       <div className="container">
         {toast && <div className="admin__toast">{toast}</div>}
+        {loadError && (
+          <div className="admin__toast admin__toast--error" style={{ background: '#7f1d1d', color: '#fff' }}>
+            {loadError}
+          </div>
+        )}
+        {loading && !loadError && (
+          <p className="admin-empty" style={{ color: '#fff', textAlign: 'center', padding: '2rem 0' }}>
+            Cargando datos del club…
+          </p>
+        )}
 
         <div className="admin__header reveal">
           <span className="section-eyebrow section-eyebrow--light">Panel administrativo</span>
@@ -1494,7 +1811,7 @@ function PortalAdmin({ onLogout }) {
             Control del <span className="accent">Club</span>
           </h2>
           <p className="section-subtitle section-subtitle--light">
-            Gestión completa de socios, cuotas, solicitudes y pagos. Acá ves todo lo que pasa en el club.
+            Gestión de socios, cuotas y pagos. Acá ves todo lo que pasa en el club.
           </p>
         </div>
 
@@ -1538,34 +1855,22 @@ function PortalAdmin({ onLogout }) {
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
             </div>
             <div className="admin-stat__body">
-              <span>Cobrado en Abril</span>
+              <span>Cobrado en {nombreMesActual}</span>
               <strong>${cobradoMes.toLocaleString('es-AR')}</strong>
               <em>{pagos.filter((p) => p.estado === 'confirmado').length} pagos confirmados</em>
             </div>
           </div>
 
-          <div className="admin-stat admin-stat--alert">
-            <div className="admin-stat__icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-            </div>
-            <div className="admin-stat__body">
-              <span>Solicitudes pendientes</span>
-              <strong>{solicitudes.length}</strong>
-              <em>nuevas altas para revisar</em>
-            </div>
-          </div>
         </div>
 
         {/* === TABS === */}
         <div className="admin-tabs reveal" role="tablist">
           {[
-            { k: 'resumen',      label: 'Resumen' },
-            { k: 'socios',       label: 'Socios (' + socios.length + ')' },
-            { k: 'cuotas',       label: 'Cuotas' },
-            { k: 'importar',     label: 'Importar' },
-            { k: 'solicitudes',  label: 'Solicitudes (' + solicitudes.length + ')' },
-            { k: 'pagos',        label: 'Pagos (' + pagos.length + ')' },
-            { k: 'config',       label: 'Configuración' }
+            { k: 'resumen', label: 'Resumen' },
+            { k: 'socios',  label: 'Socios (' + socios.length + ')' },
+            { k: 'cuotas',  label: 'Cuotas' },
+            { k: 'pagos',   label: 'Pagos (' + pagos.length + ')' },
+            { k: 'config',  label: 'Configuración' }
           ].map((t) => (
             <button
               key={t.k}
@@ -1630,7 +1935,7 @@ function PortalAdmin({ onLogout }) {
               <div className="admin-card admin-card--full">
                 <div className="admin-card__head">
                   <h3>Cobranza del mes</h3>
-                  <span>Abril 2026 — {pctAlDia}% del plantel al día</span>
+                  <span>{nombreMesActual.charAt(0).toUpperCase() + nombreMesActual.slice(1)} {ahora.getFullYear()} — {pctAlDia}% del plantel al día</span>
                 </div>
                 <div className="admin-progress">
                   <div className="admin-progress__bar">
@@ -1645,13 +1950,6 @@ function PortalAdmin({ onLogout }) {
                 </div>
               </div>
 
-              <div className="admin-card admin-card--full">
-                <div className="admin-card__head">
-                  <h3>Cobranza últimos 6 meses</h3>
-                  <span>Recaudado vs adeudado por mes</span>
-                </div>
-                <AdminChart data={ADMIN_CHART_DATA} />
-              </div>
             </div>
           )}
 
@@ -1700,7 +1998,6 @@ function PortalAdmin({ onLogout }) {
                   <p className="admin-empty">Sin resultados con los filtros actuales.</p>
                 ) : sociosFiltrados.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map((s) => {
                   const phone = String(s.telefono || '').replace(/\D/g, '');
-                  const enPausa = !!pausas[s.socio_id];
                   return (
                   <div key={s.socio_id} className="admin-table__row admin-table__row--clickable" onClick={() => setDetalleSocio(s)} role="button" tabIndex={0}>
                     <span data-label="ID"><code>{s.socio_id}</code></span>
@@ -1716,8 +2013,8 @@ function PortalAdmin({ onLogout }) {
                     </span>
                     <span data-label="Categoría">{s.categoria}</span>
                     <span data-label="Estado">
-                      <span className={'admin-pill admin-pill--' + (s.estado === 'activo' ? (enPausa ? 'pausa' : (s.adeuda > 0 ? 'warn' : 'ok')) : 'off')}>
-                        {s.estado === 'desactivado' ? 'Desactivado' : (enPausa ? '⏸ En pausa' : (s.adeuda > 0 ? 'Con deuda' : 'Al día'))}
+                      <span className={'admin-pill admin-pill--' + (s.estado === 'activo' ? (s.adeuda > 0 ? 'warn' : 'ok') : 'off')}>
+                        {s.estado === 'desactivado' ? 'Desactivado' : (s.adeuda > 0 ? 'Con deuda' : 'Al día')}
                       </span>
                     </span>
                     <span data-label="Adeudado" className="admin-table__num">
@@ -1727,10 +2024,6 @@ function PortalAdmin({ onLogout }) {
                     <span data-label="Acciones" className="admin-table__actions" onClick={(e) => e.stopPropagation()}>
                       {s.adeuda > 0 && (
                         <button type="button" className="admin-btn admin-btn--xs admin-btn--ok" onClick={() => marcarCuotaPagada(s.socio_id)} title="Marcar deuda como pagada">✓ Pagar</button>
-                      )}
-                      {s.estado === 'activo' && (enPausa
-                        ? <button type="button" className="admin-btn admin-btn--xs admin-btn--ghost" onClick={() => quitarPausa(s.socio_id)} title="Quitar la pausa">↻ Reactivar cuota</button>
-                        : <button type="button" className="admin-btn admin-btn--xs admin-btn--ghost" onClick={() => setPausaSocio(s)} title="Pausar generación de cuota por ausencia">⏸ Pausar</button>
                       )}
                       {s.estado === 'activo'
                         ? <button type="button" className="admin-btn admin-btn--xs admin-btn--ghost" onClick={() => desactivarSocio(s.socio_id)}>Desactivar</button>
@@ -1762,57 +2055,15 @@ function PortalAdmin({ onLogout }) {
           {tab === 'cuotas' && (
             <AdminCuotas
               socios={socios}
-              pausas={pausas}
               onMarcarPagada={marcarCuotaPagada}
-              onPausar={(s) => setPausaSocio(s)}
-              onQuitarPausa={quitarPausa}
+              onGenerarCuotasMes={generarCuotasDelMes}
+              generandoCuotas={generandoCuotas}
+              montoBase={Number(config.cuota_monto_base) || 15000}
             />
-          )}
-
-          {tab === 'importar' && (
-            <AdminImportar onImportar={importarSocios} />
           )}
 
           {tab === 'config' && (
             <AdminConfig config={config} onSave={guardarConfig} />
-          )}
-
-          {tab === 'solicitudes' && (
-            <div className="admin-card admin-card--full">
-              <div className="admin-card__head">
-                <h3>Solicitudes pendientes de aprobación</h3>
-                <span>Revisá cada una antes de aceptar</span>
-              </div>
-              {solicitudes.length === 0 ? (
-                <p className="admin-empty">Todo aprobado. Cero solicitudes pendientes.</p>
-              ) : (
-                <div className="admin-solicitudes">
-                  {solicitudes.map((s) => (
-                    <article key={s.socio_id} className="admin-sol">
-                      <div className="admin-sol__head">
-                        <h4>{s.nombre}</h4>
-                        <span className="admin-sol__id">{s.socio_id}</span>
-                      </div>
-                      <dl className="admin-sol__data">
-                        <div><dt>DNI</dt><dd>{s.dni}</dd></div>
-                        <div><dt>Email</dt><dd>{s.email}</dd></div>
-                        <div><dt>Teléfono</dt><dd>{s.telefono}</dd></div>
-                        <div><dt>Categoría</dt><dd>{s.categoria}</dd></div>
-                        <div><dt>Solicitada</dt><dd>{s.fecha_alta}</dd></div>
-                      </dl>
-                      <div className="admin-sol__actions">
-                        <button type="button" className="admin-btn admin-btn--ok" onClick={() => aprobarSolicitud(s.socio_id)}>
-                          ✓ Aprobar
-                        </button>
-                        <button type="button" className="admin-btn admin-btn--ghost" onClick={() => rechazarSolicitud(s.socio_id)}>
-                          Rechazar
-                        </button>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              )}
-            </div>
           )}
 
           {tab === 'pagos' && (
@@ -1827,6 +2078,9 @@ function PortalAdmin({ onLogout }) {
                   <span>Exportar CSV</span>
                 </button>
               </div>
+              {pagos.length === 0 ? (
+                <p className="admin-empty">Todavía no hay pagos registrados.</p>
+              ) : (
               <div className="admin-table admin-table--pagos">
                 <div className="admin-table__head">
                   <span>Fecha</span>
@@ -1835,6 +2089,7 @@ function PortalAdmin({ onLogout }) {
                   <span>Referencia</span>
                   <span>Estado</span>
                   <span className="admin-table__num">Monto</span>
+                  <span>Acciones</span>
                 </div>
                 {pagos.map((p, i) => (
                   <div key={i} className="admin-table__row">
@@ -1845,32 +2100,50 @@ function PortalAdmin({ onLogout }) {
                     </span>
                     <span data-label="Ref"><code>{p.ref}</code></span>
                     <span data-label="Estado">
-                      <span className={'admin-pill admin-pill--' + (p.estado === 'confirmado' ? 'ok' : 'warn')}>{p.estado}</span>
+                      <span className={'admin-pill admin-pill--' + (p.estado === 'confirmado' ? 'ok' : p.estado === 'anulado' ? 'off' : 'warn')}>{p.estado}</span>
                     </span>
                     <span data-label="Monto" className="admin-table__num">
                       <strong>${p.monto.toLocaleString('es-AR')}</strong>
                     </span>
+                    <span data-label="Acciones" className="admin-table__actions">
+                      {p.estado === 'confirmado' && (
+                        <button type="button" className="admin-btn admin-btn--xs admin-btn--ghost" onClick={() => anularPago(p.fecha_iso)}>
+                          Anular
+                        </button>
+                      )}
+                    </span>
                   </div>
                 ))}
               </div>
+              )}
             </div>
           )}
         </div>
       </div>
 
       {showNewModal && <NewSocioModal onClose={() => setShowNewModal(false)} onCreate={crearSocio} />}
-      {pausaSocio && <PausaCuotaModal socio={pausaSocio} onClose={() => setPausaSocio(null)} onConfirm={(d) => aplicarPausa(pausaSocio.socio_id, d)} />}
+      {editSocio && <EditSocioModal socio={editSocio} onClose={() => setEditSocio(null)} onSave={editarSocio} />}
+      {addCuotaFor && (
+        <NuevaCuotaModal
+          socio={addCuotaFor}
+          onClose={() => setAddCuotaFor(null)}
+          onCreate={agregarCuota}
+          defaultMonto={Number(config.cuota_monto_base) || 15000}
+        />
+      )}
       {detalleSocio && (
         <DetalleSocioModal
           socio={detalleSocio}
-          pausa={pausas[detalleSocio.socio_id]}
           pagos={pagos.filter((p) => p.socio_id === detalleSocio.socio_id)}
           onClose={() => setDetalleSocio(null)}
           onMarcarPagada={() => { marcarCuotaPagada(detalleSocio.socio_id); setDetalleSocio(null); }}
-          onPausar={() => { setPausaSocio(detalleSocio); setDetalleSocio(null); }}
-          onQuitarPausa={() => { quitarPausa(detalleSocio.socio_id); setDetalleSocio(null); }}
           onDesactivar={() => { desactivarSocio(detalleSocio.socio_id); setDetalleSocio(null); }}
           onReactivar={() => { reactivarSocio(detalleSocio.socio_id); setDetalleSocio(null); }}
+          onEdit={() => { setEditSocio(detalleSocio); setDetalleSocio(null); }}
+          onAddCuota={() => { setAddCuotaFor(detalleSocio); setDetalleSocio(null); }}
+          onResendInvite={() => reenviarInvitacion(detalleSocio)}
+          onMarcarCuotaPagada={marcarCuotaPagadaIndividual}
+          onPagoParcial={pagoParcial}
         />
       )}
     </section>
@@ -1880,32 +2153,44 @@ function PortalAdmin({ onLogout }) {
 // ============================================================
 // AdminCuotas — vista detallada de cuotas con acciones rápidas
 // ============================================================
-function AdminCuotas({ socios, pausas, onMarcarPagada, onPausar, onQuitarPausa }) {
-  const [filter, setFilter] = useState('con_deuda'); // todos | con_deuda | al_dia | en_pausa
+function AdminCuotas({ socios, onMarcarPagada, onGenerarCuotasMes, generandoCuotas, montoBase }) {
+  const [filter, setFilter] = useState('con_deuda'); // todos | con_deuda | al_dia
   const conDeuda = socios.filter((s) => s.adeuda > 0 && s.estado === 'activo');
-  const alDia    = socios.filter((s) => s.adeuda === 0 && s.estado === 'activo' && !pausas[s.socio_id]);
-  const enPausa  = socios.filter((s) => pausas[s.socio_id]);
+  const alDia    = socios.filter((s) => s.adeuda === 0 && s.estado === 'activo');
+  const sociosActivos = socios.filter((s) => s.estado === 'activo').length;
 
   const lista = filter === 'con_deuda' ? conDeuda
     : filter === 'al_dia' ? alDia
-    : filter === 'en_pausa' ? enPausa
     : socios.filter((s) => s.estado === 'activo');
 
   const totalDeuda = conDeuda.reduce((s, x) => s + x.adeuda, 0);
+
+  const ahora = new Date();
+  const mesNombre = ahora.toLocaleDateString('es-AR', { month: 'long' });
+
+  const confirmarGenerar = () => {
+    const ok = confirm(
+      `Generar cuotas de ${mesNombre} ${ahora.getFullYear()} para los ${sociosActivos} socio(s) activos a $${montoBase.toLocaleString('es-AR')} cada una?\n\n` +
+      `(Solo crea cuotas para los que NO la tienen todavía — es seguro correrlo varias veces.)`
+    );
+    if (ok) onGenerarCuotasMes();
+  };
 
   return (
     <div className="admin-card admin-card--full">
       <div className="admin-card__head admin-card__head--row">
         <div>
           <h3>Gestión de cuotas</h3>
-          <span>Marcá pagos manuales, pausá cuotas por ausencia, controlá quién está al día.</span>
+          <span>Marcá pagos manuales y controlá quién está al día.</span>
         </div>
+        <button type="button" className="admin-toolbar__btn" onClick={confirmarGenerar} disabled={generandoCuotas}>
+          {generandoCuotas ? 'Generando...' : `+ Generar cuotas de ${mesNombre}`}
+        </button>
       </div>
 
       <div className="admin-cuotas__summary">
         <div><strong>{conDeuda.length}</strong><span>con deuda</span></div>
         <div><strong>{alDia.length}</strong><span>al día</span></div>
-        <div><strong>{enPausa.length}</strong><span>en pausa</span></div>
         <div><strong>${totalDeuda.toLocaleString('es-AR')}</strong><span>por cobrar</span></div>
       </div>
 
@@ -1914,7 +2199,6 @@ function AdminCuotas({ socios, pausas, onMarcarPagada, onPausar, onQuitarPausa }
           {[
             { k: 'con_deuda', label: 'Con deuda' },
             { k: 'al_dia',    label: 'Al día' },
-            { k: 'en_pausa',  label: 'En pausa' },
             { k: 'todos',     label: 'Todos los activos' }
           ].map((f) => (
             <button key={f.k} type="button"
@@ -1930,15 +2214,11 @@ function AdminCuotas({ socios, pausas, onMarcarPagada, onPausar, onQuitarPausa }
         <ul className="admin-cuotas__list">
           {lista.map((s) => {
             const phone = String(s.telefono || '').replace(/\D/g, '');
-            const pausa = pausas[s.socio_id];
             return (
-              <li key={s.socio_id} className={'admin-cuotas__item' + (pausa ? ' is-pausa' : (s.adeuda > 0 ? ' is-deuda' : ' is-ok'))}>
+              <li key={s.socio_id} className={'admin-cuotas__item' + (s.adeuda > 0 ? ' is-deuda' : ' is-ok')}>
                 <div className="admin-cuotas__info">
                   <strong>{s.nombre}</strong>
                   <span>{s.socio_id} · {s.categoria}</span>
-                  {pausa && (
-                    <em className="admin-cuotas__pausa">⏸ Pausada del {pausa.desde} al {pausa.hasta} — {pausa.motivo}</em>
-                  )}
                 </div>
                 <div className="admin-cuotas__monto">
                   {s.adeuda > 0
@@ -1957,9 +2237,6 @@ function AdminCuotas({ socios, pausas, onMarcarPagada, onPausar, onQuitarPausa }
                       Recordar
                     </a>
                   )}
-                  {pausa
-                    ? <button type="button" className="admin-btn admin-btn--ghost" onClick={() => onQuitarPausa(s.socio_id)}>↻ Quitar pausa</button>
-                    : <button type="button" className="admin-btn admin-btn--ghost" onClick={() => onPausar(s)}>⏸ Pausar</button>}
                 </div>
               </li>
             );
@@ -1970,166 +2247,6 @@ function AdminCuotas({ socios, pausas, onMarcarPagada, onPausar, onQuitarPausa }
   );
 }
 
-// ============================================================
-// AdminImportar — CSV / TSV / paste desde Excel
-// ============================================================
-function AdminImportar({ onImportar }) {
-  const [raw, setRaw] = useState('');
-  const [preview, setPreview] = useState([]);
-  const [error, setError] = useState('');
-  const fileInputRef = useRef(null);
-
-  const parse = (text) => {
-    setError('');
-    if (!text || !text.trim()) { setPreview([]); return; }
-    // Detectar separador: tab > coma > punto y coma
-    const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
-    if (lines.length < 2) { setError('Necesitás al menos una fila de headers + una fila de datos.'); setPreview([]); return; }
-    const sep = lines[0].includes('\t') ? '\t'
-              : lines[0].split(',').length >= lines[0].split(';').length ? ',' : ';';
-    const splitLine = (l) => l.split(sep).map((c) => c.replace(/^"|"$/g, '').trim());
-    const headers = splitLine(lines[0]).map((h) => h.toLowerCase().replace(/\s+/g, '_'));
-    // Mapeo flexible: aceptamos sinónimos comunes
-    const map = (h) => {
-      if (['nombre', 'apellido_y_nombre', 'nombre_completo', 'name'].includes(h)) return 'nombre';
-      if (['email', 'mail', 'correo'].includes(h)) return 'email';
-      if (['dni', 'documento'].includes(h)) return 'dni';
-      if (['telefono', 'teléfono', 'celular', 'phone', 'tel'].includes(h)) return 'telefono';
-      if (['categoria', 'categoría', 'division', 'división'].includes(h)) return 'categoria';
-      if (['dorsal', 'numero', 'número'].includes(h)) return 'dorsal';
-      return null;
-    };
-    const fields = headers.map(map);
-    const rows = lines.slice(1).map((l) => {
-      const cols = splitLine(l);
-      const obj = {};
-      fields.forEach((f, i) => { if (f) obj[f] = cols[i] || ''; });
-      return obj;
-    }).filter((r) => r.nombre || r.email);
-    setPreview(rows);
-  };
-
-  const onFile = (e) => {
-    const f = e.target.files[0];
-    if (!f) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const text = String(ev.target.result || '');
-      setRaw(text);
-      parse(text);
-    };
-    reader.readAsText(f, 'utf-8');
-  };
-
-  const onPaste = (text) => {
-    setRaw(text);
-    parse(text);
-  };
-
-  return (
-    <div className="admin-card admin-card--full">
-      <div className="admin-card__head">
-        <h3>Importar socios desde Excel / CSV</h3>
-        <span>Subí un archivo o pegá las celdas directamente desde Excel/Sheets.</span>
-      </div>
-
-      <div className="admin-import">
-        <div className="admin-import__step">
-          <div className="admin-import__step-num">1</div>
-          <div className="admin-import__step-body">
-            <h4>Cargá los datos</h4>
-            <p>Aceptamos <strong>CSV</strong>, <strong>TSV</strong> o pegado directo desde Excel/Google Sheets. La primera fila debe tener los headers.</p>
-            <p className="admin-import__hint">
-              Headers reconocidos: <code>nombre</code>, <code>email</code>, <code>dni</code>, <code>telefono</code>, <code>categoria</code>, <code>dorsal</code>.
-              No importa si están en mayúsculas, con/sin tilde o con sinónimos (<code>celular</code>, <code>division</code>, etc).
-            </p>
-
-            <div className="admin-import__inputs">
-              <button type="button" className="admin-toolbar__btn" onClick={() => fileInputRef.current && fileInputRef.current.click()}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
-                <span>Subir archivo (.csv / .tsv / .txt)</span>
-              </button>
-              <input ref={fileInputRef} type="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values" onChange={onFile} style={{ display: 'none' }} />
-              <span className="admin-import__or">o</span>
-              <textarea
-                value={raw}
-                onChange={(e) => onPaste(e.target.value)}
-                placeholder={"Pegá acá las celdas copiadas desde Excel\n\nEjemplo:\nnombre\temail\tdni\ttelefono\tcategoria\nJuan Pérez\tjuan@gmail.com\t30123456\t1145678901\t3ra División"}
-                rows={6}
-                className="admin-import__textarea"
-              />
-            </div>
-          </div>
-        </div>
-
-        {error && <div className="modal__error">{error}</div>}
-
-        {preview.length > 0 && (
-          <div className="admin-import__step">
-            <div className="admin-import__step-num">2</div>
-            <div className="admin-import__step-body">
-              <h4>Vista previa ({preview.length} socio{preview.length === 1 ? '' : 's'})</h4>
-              <p>Revisá que todo se interpretó bien antes de importar.</p>
-              <div className="admin-import__preview">
-                <div className="admin-import__preview-head">
-                  <span>Nombre</span>
-                  <span>Email</span>
-                  <span>DNI</span>
-                  <span>Teléfono</span>
-                  <span>Categoría</span>
-                </div>
-                {preview.slice(0, 25).map((r, i) => (
-                  <div key={i} className="admin-import__preview-row">
-                    <span>{r.nombre || <em>—</em>}</span>
-                    <span>{r.email || <em>—</em>}</span>
-                    <span>{r.dni || <em>—</em>}</span>
-                    <span>{r.telefono || <em>—</em>}</span>
-                    <span>{r.categoria || <em>—</em>}</span>
-                  </div>
-                ))}
-                {preview.length > 25 && <div className="admin-import__preview-more">… y {preview.length - 25} más</div>}
-              </div>
-              <button type="button" className="admin-toolbar__btn admin-import__commit" onClick={() => onImportar(preview)}>
-                ✓ Importar {preview.length} socio{preview.length === 1 ? '' : 's'}
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ============================================================
-// AdminChart — barras de cobranza (CSS puro, sin librería)
-// ============================================================
-function AdminChart({ data }) {
-  const max = Math.max(...data.map((d) => d.recaudado + d.adeudado));
-  const fmt = (n) => '$' + Math.round(n / 1000) + 'k';
-  return (
-    <div className="admin-chart">
-      <div className="admin-chart__grid">
-        {data.map((m) => (
-          <div key={m.mes} className="admin-chart__col">
-            <div className="admin-chart__bars" title={`${m.mes}: $${m.recaudado.toLocaleString('es-AR')} cobrado, $${m.adeudado.toLocaleString('es-AR')} pendiente`}>
-              <div className="admin-chart__bar admin-chart__bar--ok" style={{ height: (m.recaudado / max * 100) + '%' }}>
-                <span>{fmt(m.recaudado)}</span>
-              </div>
-              <div className="admin-chart__bar admin-chart__bar--warn" style={{ height: (m.adeudado / max * 100) + '%' }}>
-                <span>{fmt(m.adeudado)}</span>
-              </div>
-            </div>
-            <span className="admin-chart__label">{m.mes}</span>
-          </div>
-        ))}
-      </div>
-      <div className="admin-chart__legend">
-        <div><span className="admin-chart__dot admin-chart__dot--ok"></span>Recaudado</div>
-        <div><span className="admin-chart__dot admin-chart__dot--warn"></span>Adeudado</div>
-      </div>
-    </div>
-  );
-}
 
 // ============================================================
 // AdminConfig — editar valores de Config visualmente
@@ -2236,7 +2353,33 @@ function AdminConfig({ config, onSave }) {
 // ============================================================
 // DetalleSocioModal — info completa de un socio + acciones rápidas
 // ============================================================
-function DetalleSocioModal({ socio, pausa, pagos, onClose, onMarcarPagada, onPausar, onQuitarPausa, onDesactivar, onReactivar }) {
+function DetalleSocioModal({
+  socio, pagos, onClose,
+  onMarcarPagada, onDesactivar, onReactivar,
+  onEdit, onAddCuota, onResendInvite,
+  onMarcarCuotaPagada, onPagoParcial
+}) {
+  const [cuotas, setCuotas] = useState([]);
+  const [cuotasLoading, setCuotasLoading] = useState(true);
+  const [cuotasError, setCuotasError] = useState('');
+  const [parcialFor, setParcialFor] = useState(null); // cuota id en modo edit parcial
+  const [parcialMonto, setParcialMonto] = useState('');
+
+  const reloadCuotas = async () => {
+    setCuotasLoading(true);
+    const { data, error } = await supabase
+      .from('cuotas')
+      .select('*')
+      .eq('socio_id', socio.profile_id)
+      .order('anio', { ascending: false })
+      .order('mes', { ascending: false });
+    if (error) setCuotasError(error.message);
+    else setCuotas(data || []);
+    setCuotasLoading(false);
+  };
+
+  useEffect(() => { reloadCuotas(); }, [socio.profile_id]);
+
   useEffect(() => {
     document.body.style.overflow = 'hidden';
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
@@ -2244,25 +2387,30 @@ function DetalleSocioModal({ socio, pausa, pagos, onClose, onMarcarPagada, onPau
     return () => { document.body.style.overflow = ''; window.removeEventListener('keydown', onKey); };
   }, [onClose]);
 
-  // Generar un mini historial de cuotas verosímil para el demo,
-  // basado en si el socio tiene deuda o no.
-  const meses = ['Enero','Febrero','Marzo','Abril'];
-  const cuotasMock = meses.map((mes, i) => {
-    const monto = 15000;
-    const esEsteMesYDebe = i === meses.length - 1 && socio.adeuda > 0;
-    return esEsteMesYDebe
-      ? { mes, monto, monto_pagado: 0,     estado: 'pendiente', fecha_pago: '' }
-      : { mes, monto, monto_pagado: monto, estado: 'pagado',    fecha_pago: ('0' + (i + 5)).slice(-2) + '/0' + (i + 1) + '/2026' };
-  });
-
   const phone = String(socio.telefono || '').replace(/\D/g, '');
   const initials = String(socio.nombre || 'S')
     .split(' ').filter(Boolean).slice(0, 2).map((s) => s[0]).join('').toUpperCase();
 
   const estadoLabel = socio.estado === 'desactivado' ? 'Desactivado'
-    : pausa ? 'En pausa' : (socio.adeuda > 0 ? 'Con deuda' : 'Al día');
+    : (socio.adeuda > 0 ? 'Con deuda' : 'Al día');
   const estadoClass = socio.estado === 'desactivado' ? 'off'
-    : pausa ? 'pausa' : (socio.adeuda > 0 ? 'warn' : 'ok');
+    : (socio.adeuda > 0 ? 'warn' : 'ok');
+
+  const MES_NOMBRE = ['', 'Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  const fmtFecha = (iso) => iso ? new Date(iso).toLocaleDateString('es-AR') : '—';
+
+  const handleMarcarPagada = async (cuotaId) => {
+    await onMarcarCuotaPagada(cuotaId);
+    reloadCuotas();
+  };
+  const handleParcialSubmit = async (cuotaId) => {
+    const monto = Number(parcialMonto);
+    if (!monto || monto <= 0) return;
+    await onPagoParcial(cuotaId, monto);
+    setParcialFor(null);
+    setParcialMonto('');
+    reloadCuotas();
+  };
 
   return (
     <div className="modal" onClick={onClose} role="dialog" aria-modal="true">
@@ -2282,7 +2430,12 @@ function DetalleSocioModal({ socio, pausa, pagos, onClose, onMarcarPagada, onPau
 
         <div className="admin-detalle__body">
           <section className="admin-detalle__section">
-            <h3>Datos personales</h3>
+            <div className="admin-card__head admin-card__head--row">
+              <h3>Datos personales</h3>
+              <button type="button" className="admin-btn admin-btn--xs admin-btn--ghost" onClick={onEdit}>
+                ✎ Editar
+              </button>
+            </div>
             <dl className="admin-detalle__data">
               <div><dt>Email</dt><dd>{socio.email || '—'}</dd></div>
               <div><dt>Teléfono</dt><dd>{socio.telefono || '—'}</dd></div>
@@ -2293,28 +2446,69 @@ function DetalleSocioModal({ socio, pausa, pagos, onClose, onMarcarPagada, onPau
             </dl>
           </section>
 
-          {pausa && (
-            <section className="admin-detalle__section admin-detalle__pausa">
-              <h3>⏸ Cuota pausada</h3>
-              <p>Desde <strong>{pausa.desde}</strong> hasta <strong>{pausa.hasta}</strong> — {pausa.motivo}.</p>
-              <p>Durante este período el sistema no le genera cuotas mensuales.</p>
-            </section>
-          )}
-
           <section className="admin-detalle__section">
-            <h3>Historial de cuotas (últimos 4 meses)</h3>
-            <ul className="admin-detalle__list">
-              {cuotasMock.map((c, i) => (
-                <li key={i}>
-                  <span className="admin-detalle__list-label">{c.mes} 2026</span>
-                  <span className={'admin-pill admin-pill--' + (c.estado === 'pagado' ? 'ok' : 'warn')}>
-                    {c.estado === 'pagado' ? '✓ Pagado' : '! Pendiente'}
-                  </span>
-                  <span className="admin-detalle__list-amount">${c.monto.toLocaleString('es-AR')}</span>
-                  <span className="admin-detalle__list-date">{c.fecha_pago || '—'}</span>
-                </li>
-              ))}
-            </ul>
+            <div className="admin-card__head admin-card__head--row">
+              <h3>Cuotas ({cuotas.length})</h3>
+              <button type="button" className="admin-btn admin-btn--xs" onClick={onAddCuota}>
+                + Agregar cuota manual
+              </button>
+            </div>
+            {cuotasLoading ? (
+              <p className="admin-empty">Cargando cuotas…</p>
+            ) : cuotasError ? (
+              <p className="admin-empty admin-text-warn">Error: {cuotasError}</p>
+            ) : cuotas.length === 0 ? (
+              <p className="admin-empty">Este socio no tiene cuotas todavía. Generalas desde la pestaña Cuotas o agregá una manual.</p>
+            ) : (
+              <ul className="admin-detalle__list">
+                {cuotas.map((c) => {
+                  const pillClass = c.estado === 'pagado' ? 'ok' : c.estado === 'parcial' ? 'pausa' : 'warn';
+                  const pillLabel = c.estado === 'pagado' ? '✓ Pagado'
+                    : c.estado === 'parcial' ? '½ Parcial'
+                    : '! Pendiente';
+                  return (
+                    <li key={c.id}>
+                      <span className="admin-detalle__list-label">
+                        {MES_NOMBRE[c.mes]} {c.anio}
+                        {Number(c.recargo) > 0 && (
+                          <em style={{ display: 'block', fontSize: '0.85em', color: '#f87171' }}>
+                            + ${Number(c.recargo).toLocaleString('es-AR')} recargo
+                          </em>
+                        )}
+                      </span>
+                      <span className={'admin-pill admin-pill--' + pillClass}>{pillLabel}</span>
+                      <span className="admin-detalle__list-amount">
+                        ${Number(c.monto_pagado).toLocaleString('es-AR')} / ${Number(c.total_a_cobrar).toLocaleString('es-AR')}
+                      </span>
+                      <span className="admin-detalle__list-date">{fmtFecha(c.fecha_pago)}</span>
+                      <span className="admin-table__actions">
+                        {c.estado !== 'pagado' && parcialFor !== c.id && (
+                          <>
+                            <button type="button" className="admin-btn admin-btn--xs admin-btn--ok" onClick={() => handleMarcarPagada(c.id)}>✓ Pagar</button>
+                            <button type="button" className="admin-btn admin-btn--xs admin-btn--ghost" onClick={() => { setParcialFor(c.id); setParcialMonto(''); }}>½ Parcial</button>
+                          </>
+                        )}
+                        {parcialFor === c.id && (
+                          <>
+                            <input
+                              type="number"
+                              autoFocus
+                              placeholder="Monto"
+                              value={parcialMonto}
+                              onChange={(e) => setParcialMonto(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') handleParcialSubmit(c.id); }}
+                              style={{ width: 90, padding: '0.3rem 0.5rem', borderRadius: 6, border: '1px solid #ccc' }}
+                            />
+                            <button type="button" className="admin-btn admin-btn--xs admin-btn--ok" onClick={() => handleParcialSubmit(c.id)}>OK</button>
+                            <button type="button" className="admin-btn admin-btn--xs admin-btn--ghost" onClick={() => setParcialFor(null)}>✕</button>
+                          </>
+                        )}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </section>
 
           <section className="admin-detalle__section">
@@ -2339,7 +2533,7 @@ function DetalleSocioModal({ socio, pausa, pagos, onClose, onMarcarPagada, onPau
         <footer className="admin-detalle__actions">
           {socio.adeuda > 0 && (
             <button type="button" className="admin-btn admin-btn--ok" onClick={onMarcarPagada}>
-              ✓ Marcar deuda pagada
+              ✓ Marcar toda la deuda pagada
             </button>
           )}
           {phone && (
@@ -2348,10 +2542,9 @@ function DetalleSocioModal({ socio, pausa, pagos, onClose, onMarcarPagada, onPau
               Contactar
             </a>
           )}
-          {socio.estado === 'activo' && (pausa
-            ? <button type="button" className="admin-btn admin-btn--ghost" onClick={onQuitarPausa}>↻ Quitar pausa</button>
-            : <button type="button" className="admin-btn admin-btn--ghost" onClick={onPausar}>⏸ Pausar cuota</button>)
-          }
+          <button type="button" className="admin-btn admin-btn--ghost" onClick={onResendInvite}>
+            ✉ Reenviar invitación
+          </button>
           {socio.estado === 'activo'
             ? <button type="button" className="admin-btn admin-btn--ghost" onClick={onDesactivar}>Desactivar</button>
             : <button type="button" className="admin-btn admin-btn--ghost" onClick={onReactivar}>Reactivar</button>}
@@ -2361,73 +2554,20 @@ function DetalleSocioModal({ socio, pausa, pagos, onClose, onMarcarPagada, onPau
   );
 }
 
-// ============================================================
-// PausaCuotaModal — excluir un socio de generación de cuota por un período
-// ============================================================
-function PausaCuotaModal({ socio, onClose, onConfirm }) {
-  const today = new Date().toISOString().slice(0, 10);
-  const [desde, setDesde] = useState(today);
-  const [hasta, setHasta] = useState('');
-  const [motivo, setMotivo] = useState('Ausencia');
-
-  useEffect(() => {
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = ''; };
-  }, []);
-
-  const submit = (e) => {
-    e.preventDefault();
-    if (!desde || !hasta) return;
-    onConfirm({ desde, hasta, motivo: motivo || 'Ausencia' });
-  };
-
-  return (
-    <div className="modal" onClick={onClose} role="dialog" aria-modal="true">
-      <div className="modal__box" onClick={(e) => e.stopPropagation()}>
-        <button type="button" className="modal__close" onClick={onClose} aria-label="Cerrar">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
-        </button>
-        <div className="modal__header">
-          <h2>Pausar cuota</h2>
-          <p>{socio.nombre} — {socio.socio_id}<br/>Durante el período pausado, el sistema no le genera cuotas mensuales.</p>
-        </div>
-        <form onSubmit={submit} className="modal__form modal__form--grid">
-          <div className="modal__field">
-            <label>Desde *</label>
-            <input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} required />
-          </div>
-          <div className="modal__field">
-            <label>Hasta *</label>
-            <input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} min={desde} required />
-          </div>
-          <div className="modal__field modal__field--full">
-            <label>Motivo</label>
-            <select value={motivo} onChange={(e) => setMotivo(e.target.value)}>
-              <option>Ausencia</option>
-              <option>Lesión / médico</option>
-              <option>Beca temporal</option>
-              <option>Suspensión deportiva</option>
-              <option>Otro</option>
-            </select>
-          </div>
-          <button type="submit" className="modal__submit modal__field--full">Aplicar pausa</button>
-          <p className="modal__disclaimer modal__field--full">
-            Las cuotas que ya están generadas y vencidas <strong>no se borran</strong> — la pausa solo afecta la generación futura.
-          </p>
-        </form>
-      </div>
-    </div>
-  );
-}
-
 function NewSocioModal({ onClose, onCreate }) {
-  const [form, setForm] = useState({ nombre: '', email: '', dni: '', telefono: '', dorsal: '', categoria: '3ra División' });
+  const [form, setForm] = useState({
+    nombre: '', email: '', dni: '', telefono: '',
+    dorsal: '', categoria: '3ra División', numero_socio: ''
+  });
   const [err, setErr] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const onChange = (e) => setForm((p) => ({ ...p, [e.target.name]: e.target.value }));
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault();
-    if (!form.nombre || !form.email || !form.dni) { setErr('Nombre, email y DNI son obligatorios.'); return; }
-    onCreate(form);
+    if (!form.nombre || !form.email) { setErr('Nombre y email son obligatorios.'); return; }
+    setErr(''); setSubmitting(true);
+    try { await onCreate(form); }
+    finally { setSubmitting(false); }
   };
   useEffect(() => {
     document.body.style.overflow = 'hidden';
@@ -2442,24 +2582,24 @@ function NewSocioModal({ onClose, onCreate }) {
         <div className="modal__header">
           <img src="/media/logo.jpeg" alt="AC" className="modal__logo" />
           <h2>Cargar socio nuevo</h2>
-          <p>Alta manual desde el panel admin. La contraseña se la pasás vos al socio.</p>
+          <p>Le va a llegar un mail con un link para que ponga su contraseña y entre al portal.</p>
         </div>
         <form onSubmit={submit} className="modal__form modal__form--grid">
           <div className="modal__field modal__field--full">
             <label>Nombre y apellido *</label>
-            <input name="nombre" value={form.nombre} onChange={onChange} maxLength={80} autoFocus />
+            <input name="nombre" value={form.nombre} onChange={onChange} maxLength={80} autoFocus required />
+          </div>
+          <div className="modal__field modal__field--full">
+            <label>Email *</label>
+            <input name="email" type="email" value={form.email} onChange={onChange} maxLength={120} required />
           </div>
           <div className="modal__field">
-            <label>DNI *</label>
+            <label>DNI</label>
             <input name="dni" value={form.dni} onChange={onChange} maxLength={10} inputMode="numeric" />
           </div>
           <div className="modal__field">
             <label>Teléfono</label>
             <input name="telefono" value={form.telefono} onChange={onChange} maxLength={25} />
-          </div>
-          <div className="modal__field modal__field--full">
-            <label>Email *</label>
-            <input name="email" type="email" value={form.email} onChange={onChange} maxLength={120} />
           </div>
           <div className="modal__field">
             <label>Dorsal</label>
@@ -2474,10 +2614,172 @@ function NewSocioModal({ onClose, onCreate }) {
               <option>Socio simpatizante</option>
             </select>
           </div>
+          <div className="modal__field modal__field--full">
+            <label>Número de socio (opcional)</label>
+            <input name="numero_socio" value={form.numero_socio} onChange={onChange} maxLength={20} placeholder="Ej: AC-0042" />
+          </div>
           {err && <div className="modal__error modal__field--full">{err}</div>}
-          <button type="submit" className="modal__submit modal__field--full">Crear socio</button>
+          <button type="submit" className="modal__submit modal__field--full" disabled={submitting}>
+            {submitting ? 'Creando...' : 'Crear socio y enviar invitación'}
+          </button>
           <p className="modal__disclaimer modal__field--full">
-            En la integración real, esto guarda la fila en la hoja Socios con estado=activo y manda mail al socio con sus credenciales.
+            El socio recibe un mail con un link válido por 24 hs. Si no le llega, podés reenviar la invitación desde el detalle del socio.
+          </p>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// EditSocioModal — edita los datos de un socio existente
+// ============================================================
+function EditSocioModal({ socio, onClose, onSave }) {
+  const [form, setForm] = useState({
+    nombre: socio.nombre || '',
+    dni: '',
+    telefono: socio.telefono || '',
+    dorsal: socio.dorsal || '',
+    categoria: socio.categoria || '3ra División',
+    numero_socio: socio.socio_id && !socio.socio_id.includes('-') ? '' : (socio.socio_id || '')
+  });
+  const [err, setErr] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const onChange = (e) => setForm((p) => ({ ...p, [e.target.name]: e.target.value }));
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!form.nombre) { setErr('El nombre es obligatorio.'); return; }
+    setErr(''); setSubmitting(true);
+    try { await onSave(form); }
+    finally { setSubmitting(false); }
+  };
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => { document.body.style.overflow = ''; window.removeEventListener('keydown', onKey); };
+  }, [onClose]);
+  return (
+    <div className="modal" onClick={onClose} role="dialog" aria-modal="true">
+      <div className="modal__box modal__box--wide" onClick={(e) => e.stopPropagation()}>
+        <button type="button" className="modal__close" onClick={onClose} aria-label="Cerrar">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+        <div className="modal__header">
+          <h2>Editar socio</h2>
+          <p>{socio.email || 'Sin email'}</p>
+        </div>
+        <form onSubmit={submit} className="modal__form modal__form--grid">
+          <div className="modal__field modal__field--full">
+            <label>Nombre y apellido *</label>
+            <input name="nombre" value={form.nombre} onChange={onChange} maxLength={80} autoFocus required />
+          </div>
+          <div className="modal__field">
+            <label>DNI</label>
+            <input name="dni" value={form.dni} onChange={onChange} maxLength={10} inputMode="numeric" placeholder={socio.dni || 'Sin cargar'} />
+          </div>
+          <div className="modal__field">
+            <label>Teléfono</label>
+            <input name="telefono" value={form.telefono} onChange={onChange} maxLength={25} />
+          </div>
+          <div className="modal__field">
+            <label>Dorsal</label>
+            <input name="dorsal" value={form.dorsal} onChange={onChange} maxLength={3} inputMode="numeric" />
+          </div>
+          <div className="modal__field">
+            <label>Categoría</label>
+            <select name="categoria" value={form.categoria} onChange={onChange}>
+              <option>3ra División</option>
+              <option>División de Honor</option>
+              <option>Inferiores</option>
+              <option>Socio simpatizante</option>
+            </select>
+          </div>
+          <div className="modal__field modal__field--full">
+            <label>Número de socio</label>
+            <input name="numero_socio" value={form.numero_socio} onChange={onChange} maxLength={20} placeholder="Ej: AC-0042" />
+          </div>
+          {err && <div className="modal__error modal__field--full">{err}</div>}
+          <button type="submit" className="modal__submit modal__field--full" disabled={submitting}>
+            {submitting ? 'Guardando...' : 'Guardar cambios'}
+          </button>
+          <p className="modal__disclaimer modal__field--full">
+            El email no se puede cambiar desde acá. Si el socio cambió de mail, comunicate con soporte.
+          </p>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// NuevaCuotaModal — agrega una cuota manual a un socio
+// ============================================================
+function NuevaCuotaModal({ socio, onClose, onCreate, defaultMonto = 15000 }) {
+  const today = new Date();
+  const [form, setForm] = useState({
+    mes: today.getMonth() + 1,
+    anio: today.getFullYear(),
+    monto: String(defaultMonto),
+    fecha_vencimiento: ''
+  });
+  const [err, setErr] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const onChange = (e) => setForm((p) => ({ ...p, [e.target.name]: e.target.value }));
+  const submit = async (e) => {
+    e.preventDefault();
+    const monto = Number(form.monto);
+    if (!monto || monto < 0) { setErr('El monto tiene que ser mayor a 0.'); return; }
+    setErr(''); setSubmitting(true);
+    try {
+      await onCreate({
+        mes: Number(form.mes),
+        anio: Number(form.anio),
+        monto,
+        fecha_vencimiento: form.fecha_vencimiento || null
+      });
+    } finally { setSubmitting(false); }
+  };
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = ''; };
+  }, []);
+  const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  return (
+    <div className="modal" onClick={onClose} role="dialog" aria-modal="true">
+      <div className="modal__box" onClick={(e) => e.stopPropagation()}>
+        <button type="button" className="modal__close" onClick={onClose} aria-label="Cerrar">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+        <div className="modal__header">
+          <h2>Agregar cuota manual</h2>
+          <p>{socio.nombre} — para multas, inscripciones o ajustes one-off.</p>
+        </div>
+        <form onSubmit={submit} className="modal__form modal__form--grid">
+          <div className="modal__field">
+            <label>Mes *</label>
+            <select name="mes" value={form.mes} onChange={onChange}>
+              {meses.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+            </select>
+          </div>
+          <div className="modal__field">
+            <label>Año *</label>
+            <input name="anio" type="number" value={form.anio} onChange={onChange} min="2024" max="2100" />
+          </div>
+          <div className="modal__field modal__field--full">
+            <label>Monto * (en pesos)</label>
+            <input name="monto" type="number" value={form.monto} onChange={onChange} min="1" />
+          </div>
+          <div className="modal__field modal__field--full">
+            <label>Fecha de vencimiento (opcional)</label>
+            <input name="fecha_vencimiento" type="date" value={form.fecha_vencimiento} onChange={onChange} />
+          </div>
+          {err && <div className="modal__error modal__field--full">{err}</div>}
+          <button type="submit" className="modal__submit modal__field--full" disabled={submitting}>
+            {submitting ? 'Creando...' : 'Crear cuota'}
+          </button>
+          <p className="modal__disclaimer modal__field--full">
+            Si el socio ya tiene cuota para ese mes/año, esta operación falla — el sistema no duplica.
           </p>
         </form>
       </div>
@@ -3267,120 +3569,37 @@ function Footer() {
 // ============================================================
 // APP raíz
 // ============================================================
-// ============================================================
-// DATOS DE DEMO — sesión de ejemplo para mostrar el portal sin login real.
-// Se muestran al apretar "Ingresar". Cuando vuelva el flujo de login real,
-// remover esto y restaurar el modal.
-// ============================================================
-const DEMO_SESSION = {
-  token: 'demo-token',
-  user: {
-    socio_id: 'AC-0001',
-    email: 'demo@agronomiacentral.com.ar',
-    nombre: 'Jugador Agronomo',
-    dorsal: '10',
-    categoria: '3ra División · División de Honor',
-    telefono: '1145242225',
-    fecha_alta: '2025-08-10',
-    estado: 'deuda',
-    estado_cuenta: 'activo'
-  },
-  cuotas: [
-    { cuota_id: 'AC-0001-202604', mes: 'Abril',   anio: 2026, monto: 15000, monto_pagado: 0,     recargo: 0,    saldo: 15000, total_cobrar: 15000, estado: 'pendiente', fecha_vencimiento: '2026-04-10', fecha_pago: '' },
-    { cuota_id: 'AC-0001-202603', mes: 'Marzo',   anio: 2026, monto: 15000, monto_pagado: 8000,  recargo: 0,    saldo: 7000,  total_cobrar: 15000, estado: 'parcial',   fecha_vencimiento: '2026-03-10', fecha_pago: '' },
-    { cuota_id: 'AC-0001-202602', mes: 'Febrero', anio: 2026, monto: 15000, monto_pagado: 0,     recargo: 3000, saldo: 18000, total_cobrar: 18000, estado: 'pendiente', fecha_vencimiento: '2026-02-10', fecha_pago: '' },
-    { cuota_id: 'AC-0001-202601', mes: 'Enero',   anio: 2026, monto: 15000, monto_pagado: 15000, recargo: 0,    saldo: 0,     total_cobrar: 15000, estado: 'pagado',    fecha_vencimiento: '2026-01-10', fecha_pago: '08/01/2026' }
-  ],
-  config: {
-    titular: 'Club S. y D. Agronomía Central',
-    cuit: '30-12345678-9',
-    cbu: '0110012345678901234567',
-    alias: 'AGRONOMIA.CENTRAL.AC',
-    mp_alias: 'agronomiacentral.mp',
-    mp_link: '',
-    mp_enabled: false,
-    whatsapp: '541145242225',
-    telefono_secretaria: '+541145242225',
-    direccion_pago: 'Bauness 958',
-    horario_pago: 'Lun a Vie 18 a 22 hs · Sábados 10 a 14 hs',
-    dia_debito: 'Los 5 de cada mes'
-  }
-};
-
-// ============================================================
-// DATOS DEMO DEL PANEL ADMIN — sólo para presentación al cliente.
-// Mezcla socios al día, con deuda, parciales, recién registrados y
-// solicitudes pendientes para que la vista se vea poblada.
-// ============================================================
-const ADMIN_DEMO = {
-  socios: [
-    { socio_id: 'AC-0001', nombre: 'Juan Pérez',          dorsal: '7',  categoria: '3ra División',     estado: 'activo',     adeuda: 0,     ultPago: '05/04/2026', telefono: '+541123456701', email: 'juan.perez@gmail.com' },
-    { socio_id: 'AC-0002', nombre: 'Martín González',     dorsal: '10', categoria: '3ra División',     estado: 'activo',     adeuda: 30000, ultPago: '15/02/2026', telefono: '+541123456702', email: 'martin.g@gmail.com' },
-    { socio_id: 'AC-0003', nombre: 'Pablo Martínez',      dorsal: '4',  categoria: 'División de Honor',estado: 'activo',     adeuda: 0,     ultPago: '03/04/2026', telefono: '+541123456703', email: 'pablo.m@hotmail.com' },
-    { socio_id: 'AC-0004', nombre: 'Sergio Rodríguez',    dorsal: '9',  categoria: '3ra División',     estado: 'activo',     adeuda: 18000, ultPago: '02/02/2026', telefono: '+541123456704', email: 'sergio.r@gmail.com' },
-    { socio_id: 'AC-0005', nombre: 'Lucas Fernández',     dorsal: '11', categoria: 'División de Honor',estado: 'activo',     adeuda: 7000,  ultPago: '20/03/2026', telefono: '+541123456705', email: 'lucas.f@gmail.com' },
-    { socio_id: 'AC-0006', nombre: 'Diego Romero',        dorsal: '5',  categoria: '3ra División',     estado: 'activo',     adeuda: 0,     ultPago: '05/04/2026', telefono: '+541123456706', email: 'diego.r@yahoo.com' },
-    { socio_id: 'AC-0007', nombre: 'Federico Acosta',     dorsal: '3',  categoria: '3ra División',     estado: 'activo',     adeuda: 45000, ultPago: '10/01/2026', telefono: '+541123456707', email: 'fede.acosta@gmail.com' },
-    { socio_id: 'AC-0008', nombre: 'Nicolás Sánchez',     dorsal: '1',  categoria: 'División de Honor',estado: 'activo',     adeuda: 0,     ultPago: '04/04/2026', telefono: '+541123456708', email: 'nico.s@gmail.com' },
-    { socio_id: 'AC-0009', nombre: 'Ezequiel Torres',     dorsal: '8',  categoria: '3ra División',     estado: 'activo',     adeuda: 0,     ultPago: '06/04/2026', telefono: '+541123456709', email: 'eze.torres@gmail.com' },
-    { socio_id: 'AC-0010', nombre: 'Maximiliano López',   dorsal: '6',  categoria: '3ra División',     estado: 'activo',     adeuda: 15000, ultPago: '08/03/2026', telefono: '+541123456710', email: 'max.lopez@gmail.com' },
-    { socio_id: 'AC-0011', nombre: 'Hernán Castro',       dorsal: '2',  categoria: 'Inferiores',       estado: 'activo',     adeuda: 0,     ultPago: '04/04/2026', telefono: '+541123456711', email: 'hernan.c@gmail.com' },
-    { socio_id: 'AC-0012', nombre: 'Gabriel Núñez',       dorsal: '14', categoria: 'División de Honor',estado: 'activo',     adeuda: 22000, ultPago: '15/02/2026', telefono: '+541123456712', email: 'gabriel.n@gmail.com' },
-    { socio_id: 'AC-0013', nombre: 'Julián Vega',         dorsal: '13', categoria: '3ra División',     estado: 'activo',     adeuda: 0,     ultPago: '01/04/2026', telefono: '+541123456713', email: 'julian.v@gmail.com' },
-    { socio_id: 'AC-0014', nombre: 'Ramiro Suárez',       dorsal: '17', categoria: 'Inferiores',       estado: 'activo',     adeuda: 12000, ultPago: '15/03/2026', telefono: '+541123456714', email: 'ramiro.s@gmail.com' },
-    { socio_id: 'AC-0015', nombre: 'Iván Molina',         dorsal: '20', categoria: '3ra División',     estado: 'activo',     adeuda: 0,     ultPago: '05/04/2026', telefono: '+541123456715', email: 'ivan.m@gmail.com' },
-    { socio_id: 'AC-0016', nombre: 'Tomás Aguirre',       dorsal: '15', categoria: 'División de Honor',estado: 'activo',     adeuda: 18000, ultPago: '20/02/2026', telefono: '+541123456716', email: 'tomas.a@gmail.com' },
-    { socio_id: 'AC-0017', nombre: 'Cristian Bravo',      dorsal: '16', categoria: '3ra División',     estado: 'activo',     adeuda: 60000, ultPago: '15/12/2025', telefono: '+541123456717', email: 'cris.b@gmail.com' },
-    { socio_id: 'AC-0018', nombre: 'Matías Herrera',      dorsal: '19', categoria: 'Inferiores',       estado: 'activo',     adeuda: 0,     ultPago: '03/04/2026', telefono: '+541123456718', email: 'matias.h@gmail.com' },
-    { socio_id: 'AC-0019', nombre: 'Esteban Morales',     dorsal: '21', categoria: 'División de Honor',estado: 'desactivado',adeuda: 0,     ultPago: '10/11/2025', telefono: '+541123456719', email: 'esteban.m@gmail.com' },
-    { socio_id: 'AC-0020', nombre: 'Damián Ríos',         dorsal: '12', categoria: '3ra División',     estado: 'activo',     adeuda: 30000, ultPago: '08/02/2026', telefono: '+541123456720', email: 'damian.r@gmail.com' }
-  ],
-  solicitudes: [
-    { socio_id: 'AC-0021', nombre: 'Pedro Silva',     dni: '32456789', email: 'pedro.silva@gmail.com',  telefono: '+541123456721', categoria: '3ra División',     fecha_alta: '2026-04-25' },
-    { socio_id: 'AC-0022', nombre: 'Andrés Quintero', dni: '34567891', email: 'andres.q@hotmail.com',   telefono: '+541123456722', categoria: 'División de Honor',fecha_alta: '2026-04-26' },
-    { socio_id: 'AC-0023', nombre: 'Luciano Paz',     dni: '35678901', email: 'luciano.paz@yahoo.com',  telefono: '+541123456723', categoria: 'Inferiores',       fecha_alta: '2026-04-26' },
-    { socio_id: 'AC-0024', nombre: 'Mauro Galíndez',  dni: '36789012', email: 'mauro.g@gmail.com',      telefono: '+541123456724', categoria: '3ra División',     fecha_alta: '2026-04-27' },
-    { socio_id: 'AC-0025', nombre: 'Bruno Cabrera',   dni: '37890123', email: 'bruno.cabrera@gmail.com',telefono: '+541123456725', categoria: 'Socio simpatizante', fecha_alta: '2026-04-27' }
-  ],
-  pagosRecientes: [
-    { fecha: '2026-04-27 14:32', socio_id: 'AC-0009', socio: 'Ezequiel Torres',  monto: 15000, metodo: 'mp',           estado: 'confirmado',  ref: 'pref_8842931' },
-    { fecha: '2026-04-27 11:08', socio_id: 'AC-0001', socio: 'Juan Pérez',       monto: 15000, metodo: 'mp',           estado: 'confirmado',  ref: 'pref_8842712' },
-    { fecha: '2026-04-26 19:45', socio_id: 'AC-0006', socio: 'Diego Romero',     monto: 15000, metodo: 'transferencia',estado: 'confirmado',  ref: 'comp-3521' },
-    { fecha: '2026-04-26 18:20', socio_id: 'AC-0015', socio: 'Iván Molina',      monto: 15000, metodo: 'mp',           estado: 'confirmado',  ref: 'pref_8841056' },
-    { fecha: '2026-04-26 16:10', socio_id: 'AC-0011', socio: 'Hernán Castro',    monto: 15000, metodo: 'efectivo',     estado: 'confirmado',  ref: '-' },
-    { fecha: '2026-04-26 12:54', socio_id: 'AC-0008', socio: 'Nicolás Sánchez',  monto: 15000, metodo: 'mp',           estado: 'confirmado',  ref: 'pref_8839871' },
-    { fecha: '2026-04-26 10:32', socio_id: 'AC-0013', socio: 'Julián Vega',      monto: 15000, metodo: 'transferencia',estado: 'confirmado',  ref: 'comp-3518' },
-    { fecha: '2026-04-25 22:18', socio_id: 'AC-0018', socio: 'Matías Herrera',   monto: 15000, metodo: 'mp',           estado: 'confirmado',  ref: 'pref_8838204' },
-    { fecha: '2026-04-25 20:05', socio_id: 'AC-0003', socio: 'Pablo Martínez',   monto: 15000, metodo: 'mp',           estado: 'confirmado',  ref: 'pref_8837998' },
-    { fecha: '2026-04-25 11:40', socio_id: 'AC-0005', socio: 'Lucas Fernández',  monto: 8000,  metodo: 'transferencia',estado: 'confirmado',  ref: 'comp-3505 (parcial)' },
-    { fecha: '2026-04-24 18:14', socio_id: 'AC-0014', socio: 'Ramiro Suárez',    monto: 15000, metodo: 'mp',           estado: 'confirmado',  ref: 'pref_8835120' },
-    { fecha: '2026-04-24 09:50', socio_id: 'AC-0023', socio: 'Pedro Silva',      monto: 15000, metodo: 'mp',           estado: 'iniciado',    ref: 'pref_8834911' }
-  ]
-};
 
 export default function App() {
-  const [session, setSession] = useState(null); // { token, user, cuotas, config }
-  // mode declarado arriba para que el useEffect del IntersectionObserver lo
-  // pueda usar en sus deps sin caer en temporal dead zone.
-  const [mode, setMode] = useState(null); // null | 'jugador' | 'admin'
+  const [session, setSession] = useState(null);
+  const [mode, setMode] = useState(null);           // null | 'jugador' | 'admin'
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [setPasswordOpen, setSetPasswordOpen] = useState(false);
 
-  // Restaurar sesión persistida al montar (si hay token vigente, refrescamos
-  // los datos contra el server por si hubo cambios en cuotas o config).
+  // Si el usuario llegó por link de invite/recovery, esperamos a que Supabase
+  // procese la URL (auto, por detectSessionInUrl=true) y abrimos el modal de
+  // setear contraseña. NO hacemos applyLogin todavía — primero la contraseña.
+  // Si no hay intent, restauramos la sesión existente como siempre.
   useEffect(() => {
-    const stored = loadSession();
-    if (!stored) return;
-    setSession(stored);
-    refreshSession(stored.token).then((res) => {
-      if (res && res.ok) {
-        const fresh = { token: res.token || stored.token, user: res.user, cuotas: res.cuotas, config: res.config };
-        setSession(fresh);
-        saveSession(fresh);
-      } else {
-        // token inválido o expirado server-side
-        clearSession();
-        setSession(null);
-      }
+    let active = true;
+
+    if (initialAuthIntent === 'invite' || initialAuthIntent === 'recovery') {
+      const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => {
+        if (!active) return;
+        if (sess) {
+          setSetPasswordOpen(true);
+          sub.subscription.unsubscribe();
+        }
+      });
+      return () => { active = false; sub.subscription.unsubscribe(); };
+    }
+
+    refreshSession().then((res) => {
+      if (!active) return;
+      if (res && res.ok) applyLogin(res);
     });
+    return () => { active = false; };
   }, []);
 
   // Reveal on scroll
@@ -3404,44 +3623,45 @@ export default function App() {
       document.querySelectorAll('.reveal:not(.visible)').forEach((el) => observer.observe(el));
     };
     run();
-    // Reobservar cuando cambia el modo o la sesión (aparece el portal/admin con
-    // sus propios elementos .reveal). Sin esto, las secciones nuevas quedan
-    // ocultas porque arrancan con opacity:0 hasta que el observer las marque.
     const t = setTimeout(run, 100);
-    const t2 = setTimeout(run, 300); // safety net adicional
+    const t2 = setTimeout(run, 300);
     return () => { observer.disconnect(); clearTimeout(t); clearTimeout(t2); };
   }, [session, mode]);
 
-  // En modo demo, "Soy Jugador" entra al portal del socio con datos de ejemplo,
-  // y "CSM Admin" entra al panel administrativo. Cuando volvamos a habilitar
-  // login real, restaurar el LoginModal y handleLogin que llama a loginUser().
-  const enterJugador = () => {
-    setMode('jugador');
-    setSession(DEMO_SESSION);
-    saveSession(DEMO_SESSION);
-    setTimeout(() => {
-      const el = document.getElementById('portal');
-      if (el) el.scrollIntoView({ behavior: 'smooth' });
-    }, 150);
+  const applyLogin = (res) => {
+    if (res.role === 'admin') {
+      setMode('admin');
+      setSession(null);
+      clearSession();
+      setTimeout(() => {
+        const el = document.getElementById('admin');
+        if (el) el.scrollIntoView({ behavior: 'smooth' });
+      }, 150);
+    } else {
+      const fresh = { user: res.user, cuotas: res.cuotas, config: res.config };
+      setMode('jugador');
+      setSession(fresh);
+      saveSession(fresh);
+      setTimeout(() => {
+        const el = document.getElementById('portal');
+        if (el) el.scrollIntoView({ behavior: 'smooth' });
+      }, 150);
+    }
   };
 
-  const enterAdmin = () => {
-    setMode('admin');
-    setSession(null); // el admin no necesita sesión de socio
-    setTimeout(() => {
-      const el = document.getElementById('admin');
-      if (el) el.scrollIntoView({ behavior: 'smooth' });
-    }, 150);
+  const handleLogin = (res) => {
+    setLoginOpen(false);
+    applyLogin(res);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await logoutUser();
     clearSession();
     setSession(null);
     setMode(null);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // El navbar muestra "Salir" cuando hay alguien logueado (jugador o admin)
   const loggedUser = mode === 'jugador' && session
     ? session.user
     : mode === 'admin'
@@ -3451,15 +3671,15 @@ export default function App() {
   return (
     <>
       <Navbar
-        onLoginClick={enterJugador}
-        onAdminClick={enterAdmin}
+        onLoginClick={() => setLoginOpen(true)}
+        onAdminClick={() => setLoginOpen(true)}
         loggedUser={loggedUser}
         onLogout={handleLogout}
       />
       <main>
         <Hero
-          onLoginClick={enterJugador}
-          onAdminClick={enterAdmin}
+          onLoginClick={() => setLoginOpen(true)}
+          onAdminClick={() => setLoginOpen(true)}
           loggedUser={loggedUser}
         />
         {mode === 'jugador' && session && (
@@ -3467,10 +3687,9 @@ export default function App() {
             user={session.user}
             cuotas={session.cuotas}
             config={session.config}
-            token={session.token}
+            token={null}
             onSessionUpdate={(updated) => {
               const fresh = {
-                token: updated.token || session.token,
                 user: updated.user,
                 cuotas: updated.cuotas || [],
                 config: updated.config || session.config
@@ -3491,6 +3710,27 @@ export default function App() {
         <Contact />
       </main>
       <Footer />
+
+      <LoginModal
+        open={loginOpen}
+        onClose={() => setLoginOpen(false)}
+        onLogin={handleLogin}
+        onSwitchToReset={() => { setLoginOpen(false); setResetOpen(true); }}
+      />
+      <ResetPasswordModal
+        open={resetOpen}
+        onClose={() => setResetOpen(false)}
+        onSwitchToLogin={() => { setResetOpen(false); setLoginOpen(true); }}
+      />
+      <SetPasswordModal
+        open={setPasswordOpen}
+        intent={initialAuthIntent}
+        onSuccess={async () => {
+          setSetPasswordOpen(false);
+          const res = await refreshSession();
+          if (res && res.ok) applyLogin(res);
+        }}
+      />
     </>
   );
 }

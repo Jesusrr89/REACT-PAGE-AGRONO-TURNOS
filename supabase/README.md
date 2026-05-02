@@ -51,7 +51,40 @@ El admin es un usuario común con `role='admin'` en `profiles`.
    ```
 4. Logueate en el sitio con ese mail/contraseña → entrás al panel admin.
 
-## 5. Crear socios desde el panel
+## 5. Deployar la Edge Function `invite-socio` (5 min)
+
+Esta función es lo que se ejecuta cuando el admin clickea **"Nuevo socio"**.
+Crea el `auth.user` y manda mail de invitación. Sin esto, el botón falla.
+
+### 5.1. Instalar el CLI de Supabase
+
+Una sola vez por máquina:
+
+- Mac: `brew install supabase/tap/supabase`
+- Windows: `scoop install supabase` (o ver [docs](https://supabase.com/docs/guides/local-development/cli/getting-started))
+
+### 5.2. Login y vincular el proyecto
+
+Desde la raíz del repo (`ac-react/`):
+
+```bash
+supabase login                       # abre el browser para autenticar
+supabase link --project-ref xxxxx    # el ref está en la URL del dashboard
+```
+
+### 5.3. Deploy
+
+```bash
+supabase functions deploy invite-socio
+```
+
+Listo. El admin ya puede crear socios desde el panel.
+
+> **Importante**: las env vars `SUPABASE_URL`, `SUPABASE_ANON_KEY` y
+> `SUPABASE_SERVICE_ROLE_KEY` se inyectan automáticamente — no tenés que
+> setearlas a mano.
+
+## 6. Crear socios desde el panel
 
 Una vez logueado como admin, **Socios → Nuevo socio**: completás email,
 nombre, etc., y la app le manda un mail de invitación al socio para que se
