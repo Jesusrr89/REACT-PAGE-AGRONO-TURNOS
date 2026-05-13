@@ -3012,6 +3012,36 @@ input, select, textarea {
 .admin-table__actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
 .admin-text-warn { color: var(--ac-accent); }
 
+/* Tabla de socios: columna de checkbox + DNI (9 columnas en desktop) */
+@media (min-width: 1025px) {
+  .admin-table--socios .admin-table__head,
+  .admin-table--socios .admin-table__row {
+    grid-template-columns: 34px 78px 1.6fr 0.95fr 1.05fr 0.95fr 0.9fr 0.9fr 1.15fr;
+  }
+}
+.admin-table__check { display: flex; align-items: center; justify-content: center; }
+.admin-table__check input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--ac-accent); cursor: pointer; }
+.admin-table__row.is-selected { background: rgba(255, 203, 5, 0.1); }
+.admin-table__row.is-selected:hover { background: rgba(255, 203, 5, 0.14); }
+
+/* Barra de acciones masivas (bulk) */
+.admin-bulkbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.65rem;
+  margin-bottom: 1rem; padding: 0.7rem 0.9rem;
+  background: rgba(255, 203, 5, 0.1);
+  border: 1px solid rgba(255, 203, 5, 0.3);
+  border-radius: 10px;
+}
+.admin-bulkbar__count { font-weight: 700; color: var(--ac-white); font-size: 0.85rem; }
+.admin-bulkbar__input {
+  width: 160px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--ac-white);
+  padding: 0.55rem 0.8rem; border-radius: 8px; font-size: 0.85rem; font-family: inherit;
+}
+.admin-bulkbar__input:focus { outline: 2px solid var(--ac-accent); outline-offset: 1px; }
+
 @media (max-width: 1024px) {
   .admin-table__head { display: none; }
   .admin-table__row {
@@ -3019,6 +3049,8 @@ input, select, textarea {
     padding: 1rem;
   }
   .admin-table--pagos .admin-table__row { grid-template-columns: 1fr 1fr; }
+  .admin-table__check { justify-content: flex-start; }
+  .admin-table__check::before { display: none; }
   .admin-table__row > span {
     display: flex; flex-direction: column;
   }

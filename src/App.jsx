@@ -517,6 +517,130 @@ const MES_ABBR = {
   Julio: 'Jul', Agosto: 'Ago', Septiembre: 'Sep', Octubre: 'Oct', Noviembre: 'Nov', Diciembre: 'Dic'
 };
 
+// ============================================================
+// Categorías del club — agrupadas. Se usan en alta/edición de socio
+// y en el formulario público "Sumate".
+// ============================================================
+const CATEGORIA_GRUPOS = [
+  { grupo: 'Formativa mixta', items: [
+    'Formativa mixta 2013', 'Formativa mixta 2014', 'Formativa mixta 2015',
+    'Formativa mixta 2016/17', 'Formativa mixta 2018/19',
+  ] },
+  { grupo: 'Baby color', items: ['Baby color 2010/11', 'Baby color 2013'] },
+  { grupo: 'Baby letra', items: ['Baby letra 2010/11', 'Baby letra 2013'] },
+  { grupo: 'Jardincito', items: ['Jardincito'] },
+  { grupo: 'Promo', items: ['Promo 2015', 'Promo 2016', 'Promo 2017', 'Promo 2018'] },
+  { grupo: 'Promo de honor', items: [
+    'Promo de honor 8va', 'Promo de honor 7ma', 'Promo de honor 6ta', 'Promo de honor 5ta',
+    'Promo de honor 4ta', 'Promo de honor 3ra', 'Promo de honor 1ra',
+  ] },
+  { grupo: 'Zona de honor', items: [
+    'Zona de honor 8va', 'Zona de honor 7ma', 'Zona de honor 6ta', 'Zona de honor 5ta',
+    'Zona de honor 4ta', 'Zona de honor 3ra', 'Zona de honor 1ra',
+  ] },
+  { grupo: 'Liga B', items: [
+    'Liga B 8va', 'Liga B 7ma', 'Liga B 6ta', 'Liga B 5ta', 'Liga B 4ta', 'Liga B 3ra', 'Liga B 1ra',
+  ] },
+  { grupo: 'Liga C', items: ['Liga C 5ta', 'Liga C 4ta', 'Liga C 3ra', 'Liga C 1ra'] },
+  { grupo: 'Proyección futsal', items: [
+    'Proyección futsal 2012/2013', 'Proyección futsal 2014', 'Proyección futsal 2015',
+    'Proyección futsal 2016', 'Proyección futsal 2017', 'Proyección futsal 2018/2019',
+  ] },
+];
+const CATEGORIAS_FLAT = CATEGORIA_GRUPOS.flatMap((g) => g.items);
+
+// ============================================================
+// Modo demo — con ?demo=1 en la URL, el panel admin se llena con datos
+// generados en el navegador (no toca Supabase). Útil para mostrar el sistema.
+// ============================================================
+const DEMO_MODE = typeof window !== 'undefined' && /[?&]demo=1\b/.test(window.location.search);
+const _pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+const _slug = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z]+/g, '.');
+const DEMO_NOMBRES = ['Juan','Mateo','Lucas','Benjamín','Thiago','Santiago','Tomás','Bautista','Felipe','Joaquín','Valentino','Lautaro','Martina','Catalina','Emma','Mía','Olivia','Valentina','Isabella','Renata','Victoria','Sofía','Camila','Julieta','Lola','Bruno','Ramiro','Iván','Nicolás','Agustín','Franco','Diego','Gonzalo','Ezequiel','Federico','Ignacio','Maximiliano','Ariana','Delfina','Guadalupe'];
+const DEMO_APELLIDOS = ['Gómez','Rodríguez','Fernández','López','Martínez','García','Pérez','Sánchez','Romero','Sosa','Álvarez','Torres','Ruiz','Díaz','Acosta','Benítez','Medina','Suárez','Herrera','Aguirre','Giménez','Molina','Silva','Castro','Rojas','Ortiz','Núñez','Luna','Cabrera','Ramos','Ferreyra','Domínguez','Vega','Ríos','Morales','Godoy','Vera','Quiroga','Ojeda','Peralta'];
+
+function buildDemoSocios(n = 150) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const nombre = _pick(DEMO_NOMBRES) + ' ' + _pick(DEMO_APELLIDOS);
+    const activo = Math.random() > 0.1;
+    const adeuda = activo && Math.random() > 0.5 ? _pick([15000, 30000, 45000, 18000, 33000, 12000]) : 0;
+    out.push({
+      socio_id: 'AC-' + String(1001 + i),
+      profile_id: 'demo-' + i,
+      nombre,
+      email: _slug(nombre) + (i + 1) + '@mail.com',
+      dni: String(18000000 + Math.floor(Math.random() * 27000000)),
+      dorsal: Math.random() > 0.45 ? String(1 + Math.floor(Math.random() * 99)) : '',
+      categoria: CATEGORIAS_FLAT[i % CATEGORIAS_FLAT.length],
+      telefono: '11' + String(30000000 + Math.floor(Math.random() * 69999999)),
+      cuota_monto: Math.random() > 0.7 ? _pick([8000, 12000, 18000, 20000, 25000]) : null,
+      estado: activo ? 'activo' : 'desactivado',
+      adeuda,
+      ultPago: Math.random() > 0.25 ? new Date(Date.now() - Math.floor(Math.random() * 120) * 86400000).toLocaleDateString('es-AR') : '—',
+    });
+  }
+  return out;
+}
+function buildDemoPagos(socios, n = 60) {
+  const metodos = ['mp', 'transferencia', 'efectivo', 'debito', 'manual'];
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const s = _pick(socios);
+    const d = new Date(Date.now() - Math.floor(Math.random() * 90) * 86400000 - Math.floor(Math.random() * 86400000));
+    out.push({
+      fecha: d.toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }),
+      fecha_iso: d.toISOString(),
+      socio_id: s.socio_id,
+      socio: s.nombre,
+      monto: _pick([15000, 30000, 45000, 12000, 18000, 25000]),
+      metodo: _pick(metodos),
+      estado: Math.random() > 0.1 ? 'confirmado' : 'anulado',
+      ref: 'demo-' + Math.floor(Math.random() * 1e6),
+    });
+  }
+  return out.sort((a, b) => b.fecha_iso.localeCompare(a.fecha_iso));
+}
+function buildDemoCuotas(socio) {
+  const now = new Date();
+  const base = socio.cuota_monto != null ? socio.cuota_monto : 15000;
+  const out = [];
+  for (let k = 0; k < 6; k++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - k, 1);
+    const pagada = k > 1 || socio.adeuda === 0;
+    const monto = base;
+    const monto_pagado = pagada ? monto : (Math.random() > 0.6 ? Math.floor(monto / 2) : 0);
+    out.push({
+      id: 'demo-c-' + socio.profile_id + '-' + k,
+      mes: d.getMonth() + 1, anio: d.getFullYear(),
+      monto, monto_pagado, recargo: 0,
+      total_a_cobrar: monto, saldo: Math.max(monto - monto_pagado, 0),
+      estado: monto_pagado >= monto ? 'pagado' : monto_pagado > 0 ? 'parcial' : 'pendiente',
+      fecha_pago: monto_pagado >= monto ? d.toISOString().slice(0, 10) : null,
+      fecha_vencimiento: new Date(d.getFullYear(), d.getMonth(), 10).toISOString().slice(0, 10),
+    });
+  }
+  return out;
+}
+
+// <select> reutilizable con las categorías agrupadas. Si el socio tiene una
+// categoría vieja que ya no está en la lista, la agregamos como opción suelta
+// para no perderla.
+function CategoriaSelect({ name = 'categoria', value = '', onChange, includeEmpty = false, className, id }) {
+  const legacy = value && !CATEGORIAS_FLAT.includes(value);
+  return (
+    <select id={id} name={name} value={value} onChange={onChange} className={className}>
+      {includeEmpty && <option value="">Seleccionar…</option>}
+      {legacy && <option value={value}>{value} (actual)</option>}
+      {CATEGORIA_GRUPOS.map((g) => (
+        <optgroup key={g.grupo} label={g.grupo}>
+          {g.items.map((it) => <option key={it} value={it}>{it}</option>)}
+        </optgroup>
+      ))}
+    </select>
+  );
+}
+
 function WhatsappIcon({ size = 18 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -1413,9 +1537,13 @@ function PortalAdmin({ onLogout }) {
   const [editSocio, setEditSocio] = useState(null);
   const [addCuotaFor, setAddCuotaFor] = useState(null);
   const [generandoCuotas, setGenerandoCuotas] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(() => new Set()); // profile_id de socios seleccionados (bulk)
+  const [bulkMonto, setBulkMonto] = useState('');
   const [toast, setToast] = useState('');
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(''), 2800); };
+  // En modo demo no se persiste nada: los writers cortan acá.
+  const demoGuard = () => { if (DEMO_MODE) { showToast('Modo demo — los cambios no se guardan en la base.'); return true; } return false; };
 
   // Carga inicial: socios + cuotas + pagos + config desde Supabase.
   // Las RLS policies tiran error si el usuario no es admin — eso lo capturamos
@@ -1423,6 +1551,17 @@ function PortalAdmin({ onLogout }) {
   const reloadAll = async () => {
     setLoading(true);
     setLoadError('');
+
+    // Modo demo: datos generados en el navegador, sin tocar Supabase.
+    if (DEMO_MODE) {
+      const ds = buildDemoSocios(150);
+      setSocios(ds);
+      setPagos(buildDemoPagos(ds, 60));
+      setConfig({ ...ADMIN_CONFIG_DEFAULT, cuota_monto_base: '15000', cuota_dia_vencimiento: '10', titular: 'Club S. y D. Agronomía Central (DEMO)' });
+      setLoading(false);
+      return;
+    }
+
     const [profilesRes, cuotasRes, pagosRes, configRes] = await Promise.all([
       supabase.from('profiles').select('*').neq('role', 'admin').order('nombre'),
       supabase.from('cuotas').select('*'),
@@ -1454,9 +1593,11 @@ function PortalAdmin({ onLogout }) {
         profile_id: p.id,
         nombre: p.nombre,
         email: p.email || '',
+        dni: p.dni || '',
         dorsal: p.dorsal != null ? String(p.dorsal) : '',
         categoria: p.categoria || '',
         telefono: p.telefono || '',
+        cuota_monto: p.cuota_monto != null ? Number(p.cuota_monto) : null,
         estado: p.estado,
         adeuda,
         ultPago: ultFecha ? new Date(ultFecha).toLocaleDateString('es-AR') : '—'
@@ -1507,6 +1648,7 @@ function PortalAdmin({ onLogout }) {
   const desactivarSocio = async (sid) => {
     const socio = findSocio(sid);
     if (!socio) return;
+    if (DEMO_MODE) { setSocios((p) => p.map((s) => s.socio_id === sid ? { ...s, estado: 'desactivado' } : s)); return showToast('Socio desactivado (demo)'); }
     const { error } = await supabase.from('profiles').update({ estado: 'desactivado' }).eq('id', socio.profile_id);
     if (error) return showToast('Error: ' + error.message);
     setSocios((p) => p.map((s) => s.socio_id === sid ? { ...s, estado: 'desactivado' } : s));
@@ -1516,6 +1658,7 @@ function PortalAdmin({ onLogout }) {
   const reactivarSocio = async (sid) => {
     const socio = findSocio(sid);
     if (!socio) return;
+    if (DEMO_MODE) { setSocios((p) => p.map((s) => s.socio_id === sid ? { ...s, estado: 'activo' } : s)); return showToast('Socio reactivado (demo)'); }
     const { error } = await supabase.from('profiles').update({ estado: 'activo' }).eq('id', socio.profile_id);
     if (error) return showToast('Error: ' + error.message);
     setSocios((p) => p.map((s) => s.socio_id === sid ? { ...s, estado: 'activo' } : s));
@@ -1527,6 +1670,7 @@ function PortalAdmin({ onLogout }) {
   const marcarCuotaPagada = async (sid) => {
     const socio = findSocio(sid);
     if (!socio || socio.adeuda === 0) return;
+    if (DEMO_MODE) { setSocios((p) => p.map((s) => s.socio_id === sid ? { ...s, adeuda: 0, ultPago: new Date().toLocaleDateString('es-AR') } : s)); return showToast('Pago registrado (demo)'); }
 
     // Traer las cuotas pendientes del socio
     const { data: pendientes, error: e1 } = await supabase
@@ -1564,6 +1708,7 @@ function PortalAdmin({ onLogout }) {
   };
 
   const crearSocio = async (data) => {
+    if (demoGuard()) return;
     // Llama a la Edge Function `invite-socio` que crea el auth.user + profile
     // y manda mail de invitación. Ver supabase/functions/invite-socio/.
     const { data: res, error } = await supabase.functions.invoke('invite-socio', {
@@ -1587,12 +1732,24 @@ function PortalAdmin({ onLogout }) {
 
   const editarSocio = async (data) => {
     if (!editSocio) return;
+    const cuotaMontoNum = data.cuota_monto === '' || data.cuota_monto == null ? null : Number(data.cuota_monto);
+    if (DEMO_MODE) {
+      setSocios((p) => p.map((s) => s.profile_id === editSocio.profile_id ? {
+        ...s, nombre: data.nombre, telefono: data.telefono || '', dorsal: data.dorsal || '',
+        categoria: data.categoria || '', dni: data.dni || s.dni,
+        cuota_monto: Number.isFinite(cuotaMontoNum) && cuotaMontoNum >= 0 ? cuotaMontoNum : null,
+        socio_id: data.numero_socio || s.socio_id,
+      } : s));
+      setEditSocio(null);
+      return showToast('Socio actualizado (demo)');
+    }
     const updates = {
       nombre: data.nombre,
       telefono: data.telefono || null,
       dorsal: data.dorsal ? Number(data.dorsal) : null,
       categoria: data.categoria || null,
-      numero_socio: data.numero_socio || null
+      numero_socio: data.numero_socio || null,
+      cuota_monto: Number.isFinite(cuotaMontoNum) && cuotaMontoNum >= 0 ? cuotaMontoNum : null
     };
     if (data.dni) updates.dni = data.dni;
     const { error } = await supabase.from('profiles').update(updates).eq('id', editSocio.profile_id);
@@ -1602,8 +1759,80 @@ function PortalAdmin({ onLogout }) {
     reloadAll();
   };
 
+  // === Bulk: selección de socios para acciones masivas ===
+  const toggleSelected = (pid) => setSelectedIds((prev) => {
+    const next = new Set(prev);
+    if (next.has(pid)) next.delete(pid); else next.add(pid);
+    return next;
+  });
+  const clearSelection = () => setSelectedIds(new Set());
+  const selectAll = (pids, on) => setSelectedIds((prev) => {
+    const next = new Set(prev);
+    pids.forEach((p) => { if (on) next.add(p); else next.delete(p); });
+    return next;
+  });
+
+  // Asigna (o quita, si monto vacío) un monto de cuota personalizado a todos
+  // los socios seleccionados de una sola operación.
+  const aplicarCuotaBulk = async () => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    const raw = String(bulkMonto).trim();
+    const valor = raw === '' ? null : Number(raw);
+    if (valor != null && (!Number.isFinite(valor) || valor < 0)) return showToast('Monto inválido.');
+    if (DEMO_MODE) {
+      const set = new Set(ids);
+      setSocios((p) => p.map((s) => set.has(s.profile_id) ? { ...s, cuota_monto: valor } : s));
+      setBulkMonto(''); clearSelection();
+      return showToast(valor == null ? `Cuota personalizada quitada a ${ids.length} socio(s) (demo)` : `Cuota de $${valor.toLocaleString('es-AR')} asignada a ${ids.length} socio(s) (demo)`);
+    }
+    const { error } = await supabase.from('profiles').update({ cuota_monto: valor }).in('id', ids);
+    if (error) return showToast('Error: ' + error.message);
+    showToast(valor == null
+      ? `✓ Cuota personalizada quitada a ${ids.length} socio(s)`
+      : `✓ Cuota de $${valor.toLocaleString('es-AR')} asignada a ${ids.length} socio(s)`);
+    setBulkMonto('');
+    clearSelection();
+    reloadAll();
+  };
+
+  // Genera la cuota del mes en curso para los socios seleccionados. Usa el
+  // monto escrito en la barra, o si está vacío el cuota_monto de cada socio
+  // (o el monto general). No duplica cuotas ya existentes.
+  const generarCuotaMesBulk = async () => {
+    const ids = new Set(selectedIds);
+    if (ids.size === 0) return;
+    if (demoGuard()) { clearSelection(); return; }
+    const ahora = new Date();
+    const mes = ahora.getMonth() + 1;
+    const anio = ahora.getFullYear();
+    const montoBase = Number(config.cuota_monto_base) || 15000;
+    const dia = Math.max(1, Math.min(28, Number(config.cuota_dia_vencimiento) || 10));
+    const fechaVenc = `${anio}-${String(mes).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
+    const raw = String(bulkMonto).trim();
+    const fijo = raw === '' ? null : Number(raw);
+    if (fijo != null && (!Number.isFinite(fijo) || fijo < 0)) return showToast('Monto inválido.');
+
+    const { data: yaTienen } = await supabase.from('cuotas').select('socio_id').eq('mes', mes).eq('anio', anio);
+    const yaSet = new Set((yaTienen || []).map((c) => c.socio_id));
+    const target = socios.filter((s) => ids.has(s.profile_id) && !yaSet.has(s.profile_id));
+    if (target.length === 0) return showToast('Los seleccionados ya tienen cuota para este mes.');
+
+    const rows = target.map((s) => ({
+      socio_id: s.profile_id, mes, anio,
+      monto: (fijo != null) ? fijo : (s.cuota_monto != null ? s.cuota_monto : montoBase),
+      fecha_vencimiento: fechaVenc
+    }));
+    const { error } = await supabase.from('cuotas').insert(rows);
+    if (error) return showToast('Error: ' + error.message);
+    showToast(`✓ ${rows.length} cuota(s) generadas para ${anio}-${String(mes).padStart(2, '0')}`);
+    clearSelection();
+    reloadAll();
+  };
+
   // Marca una cuota específica como totalmente pagada + audit trail.
   const marcarCuotaPagadaIndividual = async (cuotaId) => {
+    if (demoGuard()) return;
     const { data: c, error: e1 } = await supabase
       .from('cuotas').select('id, socio_id, total_a_cobrar, monto_pagado').eq('id', cuotaId).single();
     if (e1 || !c) return showToast('Error: ' + (e1?.message || 'cuota no encontrada'));
@@ -1630,6 +1859,7 @@ function PortalAdmin({ onLogout }) {
 
   // Pago parcial — suma `monto` a monto_pagado (sin pasarse del total).
   const pagoParcial = async (cuotaId, monto) => {
+    if (demoGuard()) return;
     const { data: c, error: e1 } = await supabase
       .from('cuotas').select('id, socio_id, total_a_cobrar, monto_pagado').eq('id', cuotaId).single();
     if (e1 || !c) return showToast('Error: ' + (e1?.message || 'cuota no encontrada'));
@@ -1661,6 +1891,7 @@ function PortalAdmin({ onLogout }) {
   // Crea una cuota one-off (multa, inscripción, ajuste).
   const agregarCuota = async ({ mes, anio, monto, fecha_vencimiento }) => {
     if (!addCuotaFor) return;
+    if (DEMO_MODE) { setAddCuotaFor(null); return showToast('Cuota agregada (demo)'); }
     const { error } = await supabase.from('cuotas').insert({
       socio_id: addCuotaFor.profile_id,
       mes, anio, monto,
@@ -1679,11 +1910,12 @@ function PortalAdmin({ onLogout }) {
 
   // Genera cuota del mes en curso para todos los activos que no la tengan.
   const generarCuotasDelMes = async () => {
+    if (demoGuard()) return;
     setGenerandoCuotas(true);
     const ahora = new Date();
     const mes = ahora.getMonth() + 1;
     const anio = ahora.getFullYear();
-    const monto = Number(config.cuota_monto_base) || 15000;
+    const montoBase = Number(config.cuota_monto_base) || 15000;
     const dia = Math.max(1, Math.min(28, Number(config.cuota_dia_vencimiento) || 10));
     const fechaVenc = `${anio}-${String(mes).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
 
@@ -1700,9 +1932,11 @@ function PortalAdmin({ onLogout }) {
       return showToast('Todos los socios activos ya tienen cuota para este mes.');
     }
 
+    // Cada socio paga su cuota personalizada (cuota_monto) o el monto general.
     const rows = faltan.map((s) => ({
       socio_id: s.profile_id,
-      mes, anio, monto,
+      mes, anio,
+      monto: s.cuota_monto != null ? s.cuota_monto : montoBase,
       fecha_vencimiento: fechaVenc
     }));
     const { error } = await supabase.from('cuotas').insert(rows);
@@ -1717,6 +1951,7 @@ function PortalAdmin({ onLogout }) {
   const reenviarInvitacion = async (socioRef) => {
     const target = socioRef || detalleSocio;
     if (!target) return;
+    if (demoGuard()) return;
     const { data: res, error } = await supabase.functions.invoke('invite-socio', {
       body: {
         email: target.email,
@@ -1734,6 +1969,7 @@ function PortalAdmin({ onLogout }) {
   // las cuotas afectadas a mano (mostramos un mensaje claro).
   const anularPago = async (pagoIso) => {
     if (!confirm('¿Seguro que querés anular este pago? Vas a tener que ajustar las cuotas a mano.')) return;
+    if (DEMO_MODE) { setPagos((p) => p.map((x) => x.fecha_iso === pagoIso ? { ...x, estado: 'anulado' } : x)); return showToast('Pago anulado (demo)'); }
     const { error } = await supabase.from('pagos').update({ estado: 'anulado' }).eq('fecha', pagoIso);
     if (error) return showToast('Error: ' + error.message);
     showToast('✓ Pago anulado. Revisá las cuotas afectadas.');
@@ -1765,6 +2001,7 @@ function PortalAdmin({ onLogout }) {
   };
 
   const guardarConfig = async (nueva) => {
+    if (DEMO_MODE) { setConfig(nueva); return showToast('Configuración guardada (demo)'); }
     // Upsert clave por clave en la tabla config.
     const rows = Object.entries(nueva).map(([key, value]) => ({ key, value: String(value ?? '') }));
     const { error } = await supabase.from('config').upsert(rows, { onConflict: 'key' });
@@ -1776,10 +2013,15 @@ function PortalAdmin({ onLogout }) {
   // Reset de paginación al cambiar filtros / búsqueda
   useEffect(() => { setPage(1); }, [search, filterEstado, filterCat, tab]);
 
-  const categorias = Array.from(new Set(socios.map((s) => s.categoria)));
+  const categorias = Array.from(new Set(socios.map((s) => s.categoria).filter(Boolean)));
   const sociosFiltrados = socios.filter((s) => {
     const q = search.toLowerCase().trim();
-    if (q && !(s.nombre.toLowerCase().includes(q) || s.socio_id.toLowerCase().includes(q) || (s.email || '').toLowerCase().includes(q))) return false;
+    if (q && !(
+      s.nombre.toLowerCase().includes(q) ||
+      s.socio_id.toLowerCase().includes(q) ||
+      (s.email || '').toLowerCase().includes(q) ||
+      (s.dni || '').toLowerCase().includes(q)
+    )) return false;
     if (filterEstado === 'activos' && s.estado !== 'activo') return false;
     if (filterEstado === 'desactivados' && s.estado !== 'desactivado') return false;
     if (filterEstado === 'al_dia' && !(s.estado === 'activo' && s.adeuda === 0)) return false;
@@ -1787,6 +2029,8 @@ function PortalAdmin({ onLogout }) {
     if (filterCat !== 'todas' && s.categoria !== filterCat) return false;
     return true;
   });
+  const pageSocios = sociosFiltrados.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const pageAllSelected = pageSocios.length > 0 && pageSocios.every((s) => selectedIds.has(s.profile_id));
 
   const topDeudores = [...socios].filter((s) => s.adeuda > 0).sort((a, b) => b.adeuda - a.adeuda).slice(0, 5);
 
@@ -1958,7 +2202,7 @@ function PortalAdmin({ onLogout }) {
               <div className="admin-toolbar">
                 <input
                   type="search"
-                  placeholder="Buscar por nombre, ID o email…"
+                  placeholder="Buscar por nombre, ID, email o DNI…"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   className="admin-toolbar__search"
@@ -1984,10 +2228,37 @@ function PortalAdmin({ onLogout }) {
                 </button>
               </div>
 
-              <div className="admin-table">
+              {selectedIds.size > 0 && (
+                <div className="admin-bulkbar">
+                  <span className="admin-bulkbar__count">{selectedIds.size} socio(s) seleccionados</span>
+                  <input
+                    type="number"
+                    min="0"
+                    placeholder="Monto de cuota $"
+                    value={bulkMonto}
+                    onChange={(e) => setBulkMonto(e.target.value)}
+                    className="admin-bulkbar__input"
+                  />
+                  <button type="button" className="admin-toolbar__btn" onClick={aplicarCuotaBulk}>
+                    {String(bulkMonto).trim() === ''
+                      ? `Quitar cuota personalizada (${selectedIds.size})`
+                      : `Asignar $${Number(bulkMonto).toLocaleString('es-AR')} a ${selectedIds.size}`}
+                  </button>
+                  <button type="button" className="admin-toolbar__btn admin-toolbar__btn--ghost" onClick={generarCuotaMesBulk} title="Crea la cuota del mes en curso para los seleccionados">
+                    Generar cuota del mes ({selectedIds.size})
+                  </button>
+                  <button type="button" className="admin-btn admin-btn--ghost" onClick={clearSelection}>✕ Limpiar</button>
+                </div>
+              )}
+
+              <div className="admin-table admin-table--socios">
                 <div className="admin-table__head">
+                  <span className="admin-table__check">
+                    <input type="checkbox" checked={pageAllSelected} onChange={(e) => selectAll(pageSocios.map((s) => s.profile_id), e.target.checked)} title="Seleccionar los de esta página" />
+                  </span>
                   <span>ID</span>
                   <span>Socio</span>
+                  <span>DNI</span>
                   <span>Categoría</span>
                   <span>Estado</span>
                   <span className="admin-table__num">Adeudado</span>
@@ -1996,10 +2267,14 @@ function PortalAdmin({ onLogout }) {
                 </div>
                 {sociosFiltrados.length === 0 ? (
                   <p className="admin-empty">Sin resultados con los filtros actuales.</p>
-                ) : sociosFiltrados.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map((s) => {
+                ) : pageSocios.map((s) => {
                   const phone = String(s.telefono || '').replace(/\D/g, '');
+                  const checked = selectedIds.has(s.profile_id);
                   return (
-                  <div key={s.socio_id} className="admin-table__row admin-table__row--clickable" onClick={() => setDetalleSocio(s)} role="button" tabIndex={0}>
+                  <div key={s.socio_id} className={'admin-table__row admin-table__row--clickable' + (checked ? ' is-selected' : '')} onClick={() => setDetalleSocio(s)} role="button" tabIndex={0}>
+                    <span data-label="" className="admin-table__check" onClick={(e) => e.stopPropagation()}>
+                      <input type="checkbox" checked={checked} onChange={() => toggleSelected(s.profile_id)} />
+                    </span>
                     <span data-label="ID"><code>{s.socio_id}</code></span>
                     <span data-label="Socio">
                       <strong>{s.nombre}</strong>
@@ -2011,7 +2286,11 @@ function PortalAdmin({ onLogout }) {
                         </a>
                       )}
                     </span>
-                    <span data-label="Categoría">{s.categoria}</span>
+                    <span data-label="DNI">{s.dni || <em>—</em>}</span>
+                    <span data-label="Categoría">
+                      {s.categoria || <em>—</em>}
+                      {s.cuota_monto != null && <em>Cuota ${s.cuota_monto.toLocaleString('es-AR')}</em>}
+                    </span>
                     <span data-label="Estado">
                       <span className={'admin-pill admin-pill--' + (s.estado === 'activo' ? (s.adeuda > 0 ? 'warn' : 'ok') : 'off')}>
                         {s.estado === 'desactivado' ? 'Desactivado' : (s.adeuda > 0 ? 'Con deuda' : 'Al día')}
@@ -2128,7 +2407,7 @@ function PortalAdmin({ onLogout }) {
           socio={addCuotaFor}
           onClose={() => setAddCuotaFor(null)}
           onCreate={agregarCuota}
-          defaultMonto={Number(config.cuota_monto_base) || 15000}
+          defaultMonto={addCuotaFor.cuota_monto != null ? addCuotaFor.cuota_monto : (Number(config.cuota_monto_base) || 15000)}
         />
       )}
       {detalleSocio && (
@@ -2367,6 +2646,11 @@ function DetalleSocioModal({
 
   const reloadCuotas = async () => {
     setCuotasLoading(true);
+    if (DEMO_MODE) {
+      setCuotas(buildDemoCuotas(socio));
+      setCuotasLoading(false);
+      return;
+    }
     const { data, error } = await supabase
       .from('cuotas')
       .select('*')
@@ -2438,9 +2722,11 @@ function DetalleSocioModal({
             </div>
             <dl className="admin-detalle__data">
               <div><dt>Email</dt><dd>{socio.email || '—'}</dd></div>
+              <div><dt>DNI</dt><dd>{socio.dni || '—'}</dd></div>
               <div><dt>Teléfono</dt><dd>{socio.telefono || '—'}</dd></div>
               <div><dt>Categoría</dt><dd>{socio.categoria || '—'}</dd></div>
               <div><dt>Dorsal</dt><dd>{socio.dorsal ? '#' + socio.dorsal : '—'}</dd></div>
+              <div><dt>Cuota del socio</dt><dd>{socio.cuota_monto != null ? '$' + socio.cuota_monto.toLocaleString('es-AR') : 'General'}</dd></div>
               <div><dt>Último pago</dt><dd>{socio.ultPago || '—'}</dd></div>
               <div><dt>Saldo</dt><dd>{socio.adeuda > 0 ? <strong className="admin-text-warn">${socio.adeuda.toLocaleString('es-AR')}</strong> : '$0 (al día)'}</dd></div>
             </dl>
@@ -2557,7 +2843,7 @@ function DetalleSocioModal({
 function NewSocioModal({ onClose, onCreate }) {
   const [form, setForm] = useState({
     nombre: '', email: '', dni: '', telefono: '',
-    dorsal: '', categoria: '3ra División', numero_socio: ''
+    dorsal: '', categoria: '', numero_socio: ''
   });
   const [err, setErr] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -2607,12 +2893,7 @@ function NewSocioModal({ onClose, onCreate }) {
           </div>
           <div className="modal__field">
             <label>Categoría</label>
-            <select name="categoria" value={form.categoria} onChange={onChange}>
-              <option>3ra División</option>
-              <option>División de Honor</option>
-              <option>Inferiores</option>
-              <option>Socio simpatizante</option>
-            </select>
+            <CategoriaSelect name="categoria" value={form.categoria} onChange={onChange} includeEmpty />
           </div>
           <div className="modal__field modal__field--full">
             <label>Número de socio (opcional)</label>
@@ -2640,7 +2921,8 @@ function EditSocioModal({ socio, onClose, onSave }) {
     dni: '',
     telefono: socio.telefono || '',
     dorsal: socio.dorsal || '',
-    categoria: socio.categoria || '3ra División',
+    categoria: socio.categoria || '',
+    cuota_monto: socio.cuota_monto != null ? String(socio.cuota_monto) : '',
     numero_socio: socio.socio_id && !socio.socio_id.includes('-') ? '' : (socio.socio_id || '')
   });
   const [err, setErr] = useState('');
@@ -2688,14 +2970,13 @@ function EditSocioModal({ socio, onClose, onSave }) {
           </div>
           <div className="modal__field">
             <label>Categoría</label>
-            <select name="categoria" value={form.categoria} onChange={onChange}>
-              <option>3ra División</option>
-              <option>División de Honor</option>
-              <option>Inferiores</option>
-              <option>Socio simpatizante</option>
-            </select>
+            <CategoriaSelect name="categoria" value={form.categoria} onChange={onChange} includeEmpty />
           </div>
-          <div className="modal__field modal__field--full">
+          <div className="modal__field">
+            <label>Monto de cuota del socio</label>
+            <input name="cuota_monto" type="number" min="0" value={form.cuota_monto} onChange={onChange} placeholder="Vacío = usa el monto general" />
+          </div>
+          <div className="modal__field">
             <label>Número de socio</label>
             <input name="numero_socio" value={form.numero_socio} onChange={onChange} maxLength={20} placeholder="Ej: AC-0042" />
           </div>
@@ -2704,7 +2985,7 @@ function EditSocioModal({ socio, onClose, onSave }) {
             {submitting ? 'Guardando...' : 'Guardar cambios'}
           </button>
           <p className="modal__disclaimer modal__field--full">
-            El email no se puede cambiar desde acá. Si el socio cambió de mail, comunicate con soporte.
+            El "monto de cuota del socio" se usa cuando generás las cuotas del mes. Si lo dejás vacío, ese socio paga el monto general configurado. El email no se puede cambiar desde acá.
           </p>
         </form>
       </div>
@@ -3371,14 +3652,8 @@ function JoinUs() {
             <div className="join__row">
               <div className="join__field">
                 <label htmlFor="categoria">Categoría *</label>
-                <select id="categoria" name="categoria" value={form.categoria} onChange={onChange}
-                  className={errors.categoria ? 'error' : ''}>
-                  <option value="">Seleccionar...</option>
-                  <option value="2008">2008</option>
-                  <option value="2007">2007</option>
-                  <option value="2006">2006</option>
-                  <option value="otra">Otra</option>
-                </select>
+                <CategoriaSelect id="categoria" name="categoria" value={form.categoria} onChange={onChange}
+                  includeEmpty className={errors.categoria ? 'error' : ''} />
                 {errors.categoria && <span className="join__error">{errors.categoria}</span>}
               </div>
               <div className="join__field">
@@ -3584,6 +3859,9 @@ export default function App() {
   useEffect(() => {
     let active = true;
 
+    // Modo demo: entrar directo al panel admin con datos generados.
+    if (DEMO_MODE) { setMode('admin'); return () => { active = false; }; }
+
     if (initialAuthIntent === 'invite' || initialAuthIntent === 'recovery') {
       const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => {
         if (!active) return;
@@ -3670,6 +3948,16 @@ export default function App() {
 
   return (
     <>
+      {DEMO_MODE && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999,
+          background: '#b45309', color: '#fff', textAlign: 'center',
+          fontSize: '0.78rem', fontWeight: 700, letterSpacing: '0.04em',
+          padding: '0.35rem 1rem'
+        }}>
+          MODO DEMO — datos de ejemplo (150 socios), nada se guarda. Quitá <code>?demo=1</code> de la URL para volver.
+        </div>
+      )}
       <Navbar
         onLoginClick={() => setLoginOpen(true)}
         onAdminClick={() => setLoginOpen(true)}
