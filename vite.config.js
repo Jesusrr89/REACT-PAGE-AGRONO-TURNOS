@@ -19,7 +19,7 @@ export default defineConfig({
       'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
       'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
       'Content-Security-Policy':
-        "default-src 'self'; img-src 'self' data: blob:; media-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'; frame-src 'self' https://www.openstreetmap.org; connect-src 'self' https://script.google.com https://script.googleusercontent.com;"
+        "default-src 'self'; img-src 'self' data: blob:; media-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'; frame-src 'self' https://www.openstreetmap.org; connect-src 'self' https://umfnazhsxwesxdujfeyy.supabase.co wss://umfnazhsxwesxdujfeyy.supabase.co;"
     }
   },
   build: {
