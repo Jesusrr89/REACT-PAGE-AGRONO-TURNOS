@@ -1536,11 +1536,50 @@ function PortalAdmin({ onLogout }) {
   const totalAdeudado = socios.reduce((s, x) => s + (x.adeuda || 0), 0);
   const ahora = new Date();
   const mesActualPrefix = ahora.getFullYear() + '-' + String(ahora.getMonth() + 1).padStart(2, '0');
-  const cobradoMes = pagos
-    .filter((p) => p.estado === 'confirmado' && (p.fecha_iso || '').startsWith(mesActualPrefix))
+  const pagosConfirmados = pagos.filter((p) => p.estado === 'confirmado');
+  const pagosMes = pagosConfirmados.filter((p) => (p.fecha_iso || '').startsWith(mesActualPrefix));
+  const cobradoMes = pagosMes.reduce((s, p) => s + p.monto, 0);
+  const cobradoAnio = pagosConfirmados
+    .filter((p) => (p.fecha_iso || '').startsWith(String(ahora.getFullYear())))
     .reduce((s, p) => s + p.monto, 0);
+  const ticketPromedioMes = pagosMes.length > 0 ? Math.round(cobradoMes / pagosMes.length) : 0;
   const pctAlDia = sociosActivos > 0 ? Math.round((sociosAlDia / sociosActivos) * 100) : 0;
   const nombreMesActual = ahora.toLocaleDateString('es-AR', { month: 'long' });
+
+  // Recaudación de los últimos 6 meses (incluido el actual). Devuelve [{label, total}].
+  const ultimos6Meses = (() => {
+    const out = [];
+    for (let k = 5; k >= 0; k--) {
+      const d = new Date(ahora.getFullYear(), ahora.getMonth() - k, 1);
+      const prefix = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+      const total = pagosConfirmados
+        .filter((p) => (p.fecha_iso || '').startsWith(prefix))
+        .reduce((s, p) => s + p.monto, 0);
+      out.push({
+        label: d.toLocaleDateString('es-AR', { month: 'short' }),
+        anio: d.getFullYear(),
+        prefix,
+        total
+      });
+    }
+    return out;
+  })();
+  const maxRecaudacion = Math.max(1, ...ultimos6Meses.map((m) => m.total));
+
+  // Export de pagos de un mes específico (MM-YYYY) en CSV.
+  const exportPagosDelMes = (prefix, label) => {
+    const rows = pagos
+      .filter((p) => (p.fecha_iso || '').startsWith(prefix))
+      .map((p) => ({
+        fecha: p.fecha, socio_id: p.socio_id, socio: p.socio, metodo: p.metodo,
+        ref: p.ref, estado: p.estado, monto: p.monto
+      }));
+    if (rows.length === 0) return showToast('No hay pagos en ' + label + '.');
+    downloadCSV('pagos-' + prefix + '.csv',
+      ['fecha', 'socio_id', 'socio', 'metodo', 'ref', 'estado', 'monto'],
+      rows);
+    showToast('✓ pagos-' + prefix + '.csv descargado');
+  };
 
   const findSocio = (sid) => socios.find((s) => s.socio_id === sid);
 
@@ -2102,7 +2141,6 @@ function PortalAdmin({ onLogout }) {
           {[
             { k: 'resumen', label: 'Resumen' },
             { k: 'socios',  label: 'Socios (' + socios.length + ')' },
-            { k: 'cuotas',  label: 'Cuotas' },
             { k: 'pagos',   label: 'Pagos (' + pagos.length + ')' },
             { k: 'config',  label: 'Configuración' }
           ].map((t) => (
@@ -2136,7 +2174,7 @@ function PortalAdmin({ onLogout }) {
                     {topDeudores.map((s) => (
                       <li key={s.socio_id} className="admin-list__row">
                         <div>
-                          <strong>{s.nombre}</strong>
+                          <strong><MiniShield />{s.nombre}</strong>
                           <span>{s.socio_id} · {s.categoria}</span>
                         </div>
                         <div className="admin-list__amount">${s.adeuda.toLocaleString('es-AR')}</div>
@@ -2155,7 +2193,7 @@ function PortalAdmin({ onLogout }) {
                   {pagos.slice(0, 6).map((p) => (
                     <li key={p.id} className="admin-list__row">
                       <div>
-                        <strong>{p.socio}</strong>
+                        <strong><MiniShield />{p.socio}</strong>
                         <span>{p.fecha} · {p.metodo.toUpperCase()}</span>
                       </div>
                       <div className="admin-list__amount admin-list__amount--ok">
@@ -2178,9 +2216,39 @@ function PortalAdmin({ onLogout }) {
                   <div className="admin-progress__legend">
                     <div><strong>{sociosAlDia}</strong><span>al día</span></div>
                     <div><strong>{sociosConDeuda}</strong><span>con deuda</span></div>
-                    <div><strong>${cobradoMes.toLocaleString('es-AR')}</strong><span>recaudado</span></div>
+                    <div><strong>${cobradoMes.toLocaleString('es-AR')}</strong><span>recaudado este mes</span></div>
+                    <div><strong>${cobradoAnio.toLocaleString('es-AR')}</strong><span>recaudado en {ahora.getFullYear()}</span></div>
+                    <div><strong>${ticketPromedioMes.toLocaleString('es-AR')}</strong><span>ticket promedio</span></div>
                     <div><strong>${totalAdeudado.toLocaleString('es-AR')}</strong><span>por cobrar</span></div>
                   </div>
+                </div>
+              </div>
+
+              <div className="admin-card admin-card--full">
+                <div className="admin-card__head admin-card__head--row">
+                  <div>
+                    <h3>Recaudación últimos 6 meses</h3>
+                    <span>Click en una barra para descargar el CSV de pagos de ese mes.</span>
+                  </div>
+                </div>
+                <div className="admin-chart">
+                  {ultimos6Meses.map((m) => {
+                    const pct = (m.total / maxRecaudacion) * 100;
+                    const isActual = m.prefix === mesActualPrefix;
+                    return (
+                      <button
+                        key={m.prefix}
+                        type="button"
+                        className={'admin-chart__bar' + (isActual ? ' is-actual' : '')}
+                        onClick={() => exportPagosDelMes(m.prefix, m.label + ' ' + m.anio)}
+                        title={`Descargar pagos de ${m.label} ${m.anio}`}
+                      >
+                        <span className="admin-chart__value">${m.total.toLocaleString('es-AR')}</span>
+                        <span className="admin-chart__fill" style={{ height: Math.max(pct, 4) + '%' }} />
+                        <span className="admin-chart__label">{m.label}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -2301,6 +2369,14 @@ function PortalAdmin({ onLogout }) {
                       {s.adeuda > 0 && (
                         <button type="button" className="admin-btn admin-btn--xs admin-btn--ok" onClick={() => marcarCuotaPagada(s.socio_id)} title="Marcar deuda como pagada">✓ Pagar</button>
                       )}
+                      {s.adeuda > 0 && phone && (
+                        <a
+                          href={`https://wa.me/${phone}?text=${encodeURIComponent('Hola ' + (s.nombre.split(' ')[0] || '') + ', te escribo del Club Agronomía Central. Tenés una cuota pendiente de $' + s.adeuda.toLocaleString('es-AR') + '. ¿Coordinamos el pago?')}`}
+                          target="_blank" rel="noopener noreferrer"
+                          className="admin-btn admin-btn--xs admin-btn--wa"
+                          title="Recordar el pago por WhatsApp con mensaje pre-armado"
+                        >📩 Recordar</a>
+                      )}
                       {s.estado === 'activo'
                         ? <button type="button" className="admin-btn admin-btn--xs admin-btn--ghost" onClick={() => desactivarSocio(s.socio_id)}>Desactivar</button>
                         : <button type="button" className="admin-btn admin-btn--xs admin-btn--ghost" onClick={() => reactivarSocio(s.socio_id)}>Reactivar</button>
@@ -2328,18 +2404,14 @@ function PortalAdmin({ onLogout }) {
             </div>
           )}
 
-          {tab === 'cuotas' && (
-            <AdminCuotas
-              socios={socios}
-              onMarcarPagada={marcarCuotaPagada}
+          {tab === 'config' && (
+            <AdminConfig
+              config={config}
+              onSave={guardarConfig}
               onGenerarCuotasMes={generarCuotasDelMes}
               generandoCuotas={generandoCuotas}
-              montoBase={Number(config.cuota_monto_base) || 15000}
+              activosNoPausados={socios.filter((s) => s.estado === 'activo' && !s.cuota_pausada).length}
             />
-          )}
-
-          {tab === 'config' && (
-            <AdminConfig config={config} onSave={guardarConfig} />
           )}
 
           {tab === 'pagos' && (
@@ -2427,113 +2499,27 @@ function PortalAdmin({ onLogout }) {
   );
 }
 
-// ============================================================
-// AdminCuotas — vista detallada de cuotas con acciones rápidas
-// ============================================================
-function AdminCuotas({ socios, onMarcarPagada, onGenerarCuotasMes, generandoCuotas, montoBase }) {
-  const [filter, setFilter] = useState('con_deuda'); // todos | con_deuda | al_dia
-  const conDeuda = socios.filter((s) => s.adeuda > 0 && s.estado === 'activo');
-  const alDia    = socios.filter((s) => s.adeuda === 0 && s.estado === 'activo');
-  const sociosActivos = socios.filter((s) => s.estado === 'activo').length;
-
-  const lista = filter === 'con_deuda' ? conDeuda
-    : filter === 'al_dia' ? alDia
-    : socios.filter((s) => s.estado === 'activo');
-
-  const totalDeuda = conDeuda.reduce((s, x) => s + x.adeuda, 0);
-
-  const ahora = new Date();
-  const mesNombre = ahora.toLocaleDateString('es-AR', { month: 'long' });
-
-  const confirmarGenerar = () => {
-    const ok = confirm(
-      `Generar cuotas de ${mesNombre} ${ahora.getFullYear()} para los ${sociosActivos} socio(s) activos a $${montoBase.toLocaleString('es-AR')} cada una?\n\n` +
-      `(Solo crea cuotas para los que NO la tienen todavía — es seguro correrlo varias veces.)`
-    );
-    if (ok) onGenerarCuotasMes();
-  };
-
-  return (
-    <div className="admin-card admin-card--full">
-      <div className="admin-card__head admin-card__head--row">
-        <div>
-          <h3>Gestión de cuotas</h3>
-          <span>Marcá pagos manuales y controlá quién está al día.</span>
-        </div>
-        <button type="button" className="admin-toolbar__btn" onClick={confirmarGenerar} disabled={generandoCuotas}>
-          {generandoCuotas ? 'Generando...' : `+ Generar cuotas de ${mesNombre}`}
-        </button>
-      </div>
-
-      <div className="admin-cuotas__summary">
-        <div><strong>{conDeuda.length}</strong><span>con deuda</span></div>
-        <div><strong>{alDia.length}</strong><span>al día</span></div>
-        <div><strong>${totalDeuda.toLocaleString('es-AR')}</strong><span>por cobrar</span></div>
-      </div>
-
-      <div className="admin-toolbar">
-        <div className="admin-tabs admin-tabs--inline">
-          {[
-            { k: 'con_deuda', label: 'Con deuda' },
-            { k: 'al_dia',    label: 'Al día' },
-            { k: 'todos',     label: 'Todos los activos' }
-          ].map((f) => (
-            <button key={f.k} type="button"
-              className={'admin-tabs__btn' + (filter === f.k ? ' is-active' : '')}
-              onClick={() => setFilter(f.k)}>{f.label}</button>
-          ))}
-        </div>
-      </div>
-
-      {lista.length === 0 ? (
-        <p className="admin-empty">No hay socios en esta vista.</p>
-      ) : (
-        <ul className="admin-cuotas__list">
-          {lista.map((s) => {
-            const phone = String(s.telefono || '').replace(/\D/g, '');
-            return (
-              <li key={s.socio_id} className={'admin-cuotas__item' + (s.adeuda > 0 ? ' is-deuda' : ' is-ok')}>
-                <div className="admin-cuotas__info">
-                  <strong>{s.nombre}</strong>
-                  <span>{s.socio_id} · {s.categoria}</span>
-                </div>
-                <div className="admin-cuotas__monto">
-                  {s.adeuda > 0
-                    ? <><strong className="admin-text-warn">${s.adeuda.toLocaleString('es-AR')}</strong><span>adeudado</span></>
-                    : <><strong style={{ color: '#4ade80' }}>$0</strong><span>al día</span></>}
-                </div>
-                <div className="admin-cuotas__actions">
-                  {s.adeuda > 0 && (
-                    <button type="button" className="admin-btn admin-btn--ok" onClick={() => onMarcarPagada(s.socio_id)}>✓ Marcar pagada</button>
-                  )}
-                  {phone && (
-                    <a href={`https://wa.me/${phone}?text=${encodeURIComponent('Hola ' + s.nombre + ', te escribo del Club Agronomía Central. ' + (s.adeuda > 0 ? 'Tenés una cuota pendiente de $' + s.adeuda.toLocaleString('es-AR') + '. ¿Coordinamos el pago?' : 'Te recuerdo el pago de la cuota mensual.'))}`}
-                      target="_blank" rel="noopener noreferrer"
-                      className="admin-btn admin-btn--wa">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347zM12.05 21.785a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.999-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.886 9.884z"/></svg>
-                      Recordar
-                    </a>
-                  )}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </div>
-  );
-}
-
 
 // ============================================================
 // AdminConfig — editar valores de Config visualmente
 // ============================================================
-function AdminConfig({ config, onSave }) {
+function AdminConfig({ config, onSave, onGenerarCuotasMes, generandoCuotas, activosNoPausados }) {
   const [form, setForm] = useState(config);
   const dirty = JSON.stringify(form) !== JSON.stringify(config);
   const onChange = (e) => setForm((p) => ({ ...p, [e.target.name]: e.target.value }));
   const submit = (e) => { e.preventDefault(); onSave(form); };
   const reset = () => setForm(config);
+
+  const ahora = new Date();
+  const mesNombre = ahora.toLocaleDateString('es-AR', { month: 'long' });
+  const montoBase = Number(config.cuota_monto_base) || 15000;
+  const confirmarGenerar = () => {
+    const ok = confirm(
+      `Generar cuotas de ${mesNombre} ${ahora.getFullYear()} para los ${activosNoPausados} socio(s) activos NO pausados a $${montoBase.toLocaleString('es-AR')} cada una (o su monto personalizado).\n\n` +
+      `Solo crea cuotas para los que NO la tienen todavía — es seguro correrlo varias veces.\n\nLos socios con cuota pausada se saltean.`
+    );
+    if (ok) onGenerarCuotasMes && onGenerarCuotasMes();
+  };
 
   const groups = [
     {
@@ -2592,6 +2578,23 @@ function AdminConfig({ config, onSave }) {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
             <span>Guardar cambios</span>
           </button>
+        </div>
+      </div>
+
+      {/* Acción mensual (antes vivía en su propia pestaña). La dejo acá para
+          que no se aprete por accidente. */}
+      <div className="admin-config__group">
+        <div className="admin-config__group-title">
+          <h4>Acciones del mes</h4>
+          <p>Generación de cuotas mensuales. Solo crea cuotas para los socios activos sin pausa que todavía no la tengan para este mes.</p>
+        </div>
+        <div className="admin-config__fields">
+          <div className="admin-config__field admin-config__field--full">
+            <button type="button" className="admin-toolbar__btn" onClick={confirmarGenerar} disabled={generandoCuotas}>
+              {generandoCuotas ? 'Generando...' : `+ Generar cuotas de ${mesNombre} ${ahora.getFullYear()}`}
+            </button>
+            <span className="admin-config__hint">Se aplican a {activosNoPausados} socio(s) activos no pausados. Cada uno paga su cuota personalizada (si tiene) o el monto base de arriba.</span>
+          </div>
         </div>
       </div>
 
@@ -3242,7 +3245,8 @@ function About() {
 // ============================================================
 function Team() {
   return (
-    <section id="plantel" className="team">
+    <section id="plantel" className="team has-shield-bg">
+      <span className="shield-bg" aria-hidden="true" />
       <div className="container">
         <div className="team__header">
           <span className="section-eyebrow section-eyebrow--light reveal">El plantel</span>
@@ -3270,10 +3274,11 @@ function Team() {
             <div className="team__card-image">
               <img src="/media/jugador1.jpeg" alt="Jugador del plantel" loading="lazy" />
               <span className="team__card-number">7</span>
+              <img src="/media/logo.jpeg" alt="" className="team__card-shield" aria-hidden="true" />
             </div>
             <div className="team__card-info">
               <span className="team__card-role">Jugador</span>
-              <h3>Plantel Superior</h3>
+              <h3><MiniShield />Plantel Superior</h3>
               <p>Compromiso, experiencia y liderazgo dentro de la cancha.</p>
             </div>
           </article>
@@ -3282,10 +3287,11 @@ function Team() {
             <div className="team__card-image">
               <img src="/media/jugador2.jpeg" alt="Jugador del plantel" loading="lazy" />
               <span className="team__card-number">AC</span>
+              <img src="/media/logo.jpeg" alt="" className="team__card-shield" aria-hidden="true" />
             </div>
             <div className="team__card-info">
               <span className="team__card-role">Jugador</span>
-              <h3>División de Honor</h3>
+              <h3><MiniShield />División de Honor</h3>
               <p>La nueva camada que defiende los colores de la institución.</p>
             </div>
           </article>
@@ -3304,6 +3310,23 @@ function Team() {
         </div>
       </div>
     </section>
+  );
+}
+
+// Mini-escudo del club. Aparece al lado del nombre del jugador y en filas del
+// admin (Top deudores, Últimos pagos). Solo decorativo (aria-hidden) — el ícono
+// como tal no transmite información, refuerza identidad.
+function MiniShield({ size = 18 }) {
+  return (
+    <img
+      src="/media/logo.jpeg"
+      alt=""
+      aria-hidden="true"
+      className="mini-shield"
+      width={size}
+      height={size}
+      loading="lazy"
+    />
   );
 }
 
@@ -3558,7 +3581,7 @@ function Gallery() {
 // ============================================================
 // JOIN US
 // ============================================================
-const EMPTY = { nombre: '', email: '', telefono: '', categoria: '', experiencia: '', mensaje: '' };
+const EMPTY = { nombre: '', email: '', telefono: '' };
 
 function JoinUs() {
   const [form, setForm] = useState(EMPTY);
@@ -3568,8 +3591,7 @@ function JoinUs() {
 
   const onChange = (e) => {
     const { name, value } = e.target;
-    const max = name === 'mensaje' ? 500 : 120;
-    setForm((p) => ({ ...p, [name]: value.slice(0, max) }));
+    setForm((p) => ({ ...p, [name]: value.slice(0, 120) }));
     if (errors[name]) setErrors((p) => ({ ...p, [name]: null }));
   };
 
@@ -3580,7 +3602,6 @@ function JoinUs() {
     if (!isValidName(form.nombre)) errs.nombre = 'Ingresá un nombre válido (2-80 caracteres).';
     if (!isValidEmail(form.email)) errs.email = 'Ingresá un email válido.';
     if (!isValidPhone(form.telefono)) errs.telefono = 'Ingresá un teléfono válido.';
-    if (!form.categoria) errs.categoria = 'Seleccioná una categoría.';
     if (Object.keys(errs).length) { setErrors(errs); return; }
 
     setSubmitting(true);
@@ -3649,32 +3670,6 @@ function JoinUs() {
                   maxLength={25} autoComplete="tel" className={errors.telefono ? 'error' : ''} />
                 {errors.telefono && <span className="join__error">{errors.telefono}</span>}
               </div>
-            </div>
-
-            <div className="join__row">
-              <div className="join__field">
-                <label htmlFor="categoria">Categoría *</label>
-                <CategoriaSelect id="categoria" name="categoria" value={form.categoria} onChange={onChange}
-                  includeEmpty className={errors.categoria ? 'error' : ''} />
-                {errors.categoria && <span className="join__error">{errors.categoria}</span>}
-              </div>
-              <div className="join__field">
-                <label htmlFor="experiencia">Experiencia en futsal</label>
-                <select id="experiencia" name="experiencia" value={form.experiencia} onChange={onChange}>
-                  <option value="">Seleccionar...</option>
-                  <option value="si-federado">Sí, jugué federado</option>
-                  <option value="si-amateur">Sí, nivel amateur</option>
-                  <option value="poca">Poca experiencia</option>
-                  <option value="no">Recién empiezo</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="join__field">
-              <label htmlFor="mensaje">Mensaje (opcional)</label>
-              <textarea id="mensaje" name="mensaje" rows="4" value={form.mensaje} onChange={onChange}
-                maxLength={500} placeholder="Contanos brevemente tu trayectoria..." />
-              <span className="join__counter">{form.mensaje.length}/500</span>
             </div>
 
             {status === 'success' && (
