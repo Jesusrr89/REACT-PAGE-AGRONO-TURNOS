@@ -7,3 +7,5 @@ dist/
 *.log
 .DS_Store
 ac-hostinger.zip
+supabase/.temp/
+supabase/.branches/
