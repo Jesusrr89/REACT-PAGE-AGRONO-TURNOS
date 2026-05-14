@@ -1431,8 +1431,28 @@ function PortalAdmin({ onLogout }) {
   const [selectedIds, setSelectedIds] = useState(() => new Set()); // profile_id de socios seleccionados (bulk)
   const [bulkMonto, setBulkMonto] = useState('');
   const [toast, setToast] = useState('');
+  // Anti doble-click: cualquier writer admin pone busy=true y los botones
+  // críticos se deshabilitan hasta que termine.
+  const [busy, setBusy] = useState(false);
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(''), 2800); };
+  // Mapea los errores típicos a algo legible. El resto pasa tal cual.
+  const friendlyError = (err) => {
+    const code = String(err?.message || err?.code || err || 'desconocido');
+    if (code.includes('not_admin'))           return 'No tenés permisos de admin para hacer esto.';
+    if (code.includes('no_pending'))          return 'Este socio no tiene cuotas pendientes.';
+    if (code.includes('already_paid'))        return 'La cuota ya está totalmente pagada.';
+    if (code.includes('already_anulled'))     return 'Este pago ya estaba anulado.';
+    if (code.includes('cuota_not_found'))     return 'No encontré la cuota (puede que la hayan borrado).';
+    if (code.includes('pago_not_found'))      return 'No encontré el pago (puede que lo hayan borrado).';
+    if (code.includes('invalid_amount'))      return 'El monto tiene que ser mayor a 0.';
+    if (code.includes('cuotas_socio_id_anio_mes_key')) return 'Ya existe una cuota para ese mes/año.';
+    if (code.includes('profiles_dni_key'))    return 'Ya hay otro socio con ese DNI.';
+    if (code.includes('profiles_numero_socio_key')) return 'Ya hay otro socio con ese número.';
+    if (code.includes('JWT') || code.includes('jwt'))  return 'Tu sesión expiró. Refrescá la página y volvé a entrar.';
+    if (code.includes('NetworkError') || code.includes('Failed to fetch')) return 'No pude conectar con el servidor. Revisá tu conexión.';
+    return 'Error: ' + code;
+  };
   // En modo demo no se persiste nada: los writers cortan acá.
   const demoGuard = () => { if (DEMO_MODE) { showToast('Modo demo — los cambios no se guardan en la base.'); return true; } return false; };
 
@@ -1625,11 +1645,57 @@ function PortalAdmin({ onLogout }) {
       clearSelection();
       return showToast(pausar ? `Cuota pausada en ${ids.length} socio(s) (demo)` : `Cuota reanudada en ${ids.length} socio(s) (demo)`);
     }
-    const { error } = await supabase.from('profiles').update({ cuota_pausada: pausar }).in('id', ids);
-    if (error) return showToast('Error: ' + error.message);
-    showToast(pausar ? `✓ Cuota pausada en ${ids.length} socio(s)` : `✓ Cuota reanudada en ${ids.length} socio(s)`);
-    clearSelection();
-    reloadAll();
+    if (busy) return;
+    setBusy(true);
+    try {
+      const { error } = await supabase.from('profiles').update({ cuota_pausada: pausar }).in('id', ids);
+      if (error) { showToast(friendlyError(error)); return; }
+      showToast(pausar ? `✓ Cuota pausada en ${ids.length} socio(s)` : `✓ Cuota reanudada en ${ids.length} socio(s)`);
+      clearSelection();
+      reloadAll();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Eliminación definitiva de un socio (Ley 25.326 art. 16 — derecho de
+  // supresión). Borra auth.user vía Edge Function `delete-socio`, y cascada
+  // del schema elimina profile + cuotas + pagos asociados.
+  const eliminarSocioDefinitivo = async (sid) => {
+    const socio = findSocio(sid);
+    if (!socio) return;
+    const txt = `¿Eliminar DEFINITIVAMENTE a ${socio.nombre}?\n\n` +
+      `Esta acción NO se puede deshacer. Se borran:\n` +
+      `- la cuenta de acceso del socio\n` +
+      `- su perfil (DNI, teléfono, etc.)\n` +
+      `- todas sus cuotas y pagos históricos\n\n` +
+      `Si solo querés que deje de operar, usá "Desactivar" — eso es reversible.\n\n` +
+      `Tipeá ELIMINAR para confirmar:`;
+    const ans = prompt(txt);
+    if (ans !== 'ELIMINAR') return;
+    if (DEMO_MODE) {
+      setSocios((p) => p.filter((s) => s.profile_id !== socio.profile_id));
+      setPagos((p) => p.filter((x) => x.socio_id !== socio.socio_id));
+      return showToast('Socio eliminado (demo)');
+    }
+    if (busy) return;
+    setBusy(true);
+    try {
+      const { data: res, error } = await supabase.functions.invoke('delete-socio', {
+        body: { profile_id: socio.profile_id }
+      });
+      if (error || (res && res.error)) {
+        const code = res?.error || error?.message || 'unknown';
+        const msg = code === 'cannot_delete_admin' ? 'No se puede eliminar a otro admin.'
+          : code === 'cannot_delete_self' ? 'No te podés eliminar a vos mismo.'
+          : friendlyError(code);
+        return showToast(msg);
+      }
+      showToast('✓ Socio eliminado definitivamente');
+      reloadAll();
+    } finally {
+      setBusy(false);
+    }
   };
 
   // Marca como pagadas TODAS las cuotas pendientes del socio en una sola operación
@@ -1637,8 +1703,10 @@ function PortalAdmin({ onLogout }) {
   const marcarCuotaPagada = async (sid) => {
     const socio = findSocio(sid);
     if (!socio || socio.adeuda === 0) return;
+    if (busy) return;
     if (DEMO_MODE) {
       const now = new Date();
+      const monto = socio.adeuda;
       setSocios((p) => p.map((s) => s.socio_id === sid ? { ...s, adeuda: 0, ultPago: now.toLocaleDateString('es-AR') } : s));
       setPagos((prev) => [{
         id: 'demo-pago-' + now.getTime(),
@@ -1646,7 +1714,7 @@ function PortalAdmin({ onLogout }) {
         fecha_iso: now.toISOString(),
         socio_id: socio.socio_id,
         socio: socio.nombre,
-        monto: socio.adeuda,
+        monto,
         metodo: 'manual',
         estado: 'confirmado',
         ref: 'demo-' + now.getTime(),
@@ -1654,39 +1722,17 @@ function PortalAdmin({ onLogout }) {
       return showToast('Pago registrado (demo)');
     }
 
-    // Traer las cuotas pendientes del socio
-    const { data: pendientes, error: e1 } = await supabase
-      .from('cuotas')
-      .select('id, monto, recargo, monto_pagado, total_a_cobrar')
-      .eq('socio_id', socio.profile_id)
-      .neq('estado', 'pagado');
-    if (e1) return showToast('Error: ' + e1.message);
-    if (!pendientes || pendientes.length === 0) return;
-
-    // Update cada cuota: monto_pagado = total_a_cobrar
-    const updates = await Promise.all(
-      pendientes.map((c) =>
-        supabase.from('cuotas').update({ monto_pagado: Number(c.total_a_cobrar) }).eq('id', c.id)
-      )
-    );
-    const failed = updates.find((r) => r.error);
-    if (failed) return showToast('Error: ' + failed.error.message);
-
-    // Audit trail en pagos
-    const monto = socio.adeuda;
-    await supabase.from('pagos').insert({
-      socio_id: socio.profile_id,
-      monto,
-      metodo: 'manual',
-      referencia: 'admin-' + Date.now(),
-      cuotas_cubiertas: pendientes.map((c) => c.id),
-      estado: 'confirmado',
-      fecha_confirmacion: new Date().toISOString(),
-      notas: 'Pago manual registrado desde el panel admin'
-    });
-
-    showToast('Pago de $' + monto.toLocaleString('es-AR') + ' registrado');
-    reloadAll();
+    // Una sola transacción server-side: la RPC update + insert + audit.
+    setBusy(true);
+    try {
+      const monto = socio.adeuda;
+      const { error } = await supabase.rpc('marcar_cuotas_pagadas', { p_socio_id: socio.profile_id });
+      if (error) { showToast(friendlyError(error)); return; }
+      showToast('Pago de $' + monto.toLocaleString('es-AR') + ' registrado');
+      reloadAll();
+    } finally {
+      setBusy(false);
+    }
   };
 
   const crearSocio = async (data) => {
@@ -1799,14 +1845,20 @@ function PortalAdmin({ onLogout }) {
       setBulkMonto(''); clearSelection();
       return showToast(valor == null ? `Cuota personalizada quitada a ${ids.length} socio(s) (demo)` : `Cuota de $${valor.toLocaleString('es-AR')} asignada a ${ids.length} socio(s) (demo)`);
     }
-    const { error } = await supabase.from('profiles').update({ cuota_monto: valor }).in('id', ids);
-    if (error) return showToast('Error: ' + error.message);
-    showToast(valor == null
-      ? `✓ Cuota personalizada quitada a ${ids.length} socio(s)`
-      : `✓ Cuota de $${valor.toLocaleString('es-AR')} asignada a ${ids.length} socio(s)`);
-    setBulkMonto('');
-    clearSelection();
-    reloadAll();
+    if (busy) return;
+    setBusy(true);
+    try {
+      const { error } = await supabase.from('profiles').update({ cuota_monto: valor }).in('id', ids);
+      if (error) { showToast(friendlyError(error)); return; }
+      showToast(valor == null
+        ? `✓ Cuota personalizada quitada a ${ids.length} socio(s)`
+        : `✓ Cuota de $${valor.toLocaleString('es-AR')} asignada a ${ids.length} socio(s)`);
+      setBulkMonto('');
+      clearSelection();
+      reloadAll();
+    } finally {
+      setBusy(false);
+    }
   };
 
   // Genera la cuota del mes en curso para los socios seleccionados. Usa el
@@ -1837,89 +1889,71 @@ function PortalAdmin({ onLogout }) {
       monto: (fijo != null) ? fijo : (s.cuota_monto != null ? s.cuota_monto : montoBase),
       fecha_vencimiento: fechaVenc
     }));
-    const { error } = await supabase.from('cuotas').insert(rows);
-    if (error) return showToast('Error: ' + error.message);
-    showToast(`✓ ${rows.length} cuota(s) generadas para ${anio}-${String(mes).padStart(2, '0')}`);
-    clearSelection();
-    reloadAll();
+    if (busy) return;
+    setBusy(true);
+    try {
+      const { error } = await supabase.from('cuotas').insert(rows);
+      if (error) { showToast(friendlyError(error)); return; }
+      showToast(`✓ ${rows.length} cuota(s) generadas para ${anio}-${String(mes).padStart(2, '0')}`);
+      clearSelection();
+      reloadAll();
+    } finally {
+      setBusy(false);
+    }
   };
 
   // Marca una cuota específica como totalmente pagada + audit trail.
   const marcarCuotaPagadaIndividual = async (cuotaId) => {
     if (demoGuard()) return;
-    const { data: c, error: e1 } = await supabase
-      .from('cuotas').select('id, socio_id, total_a_cobrar, monto_pagado').eq('id', cuotaId).single();
-    if (e1 || !c) return showToast('Error: ' + (e1?.message || 'cuota no encontrada'));
-    const aPagar = Number(c.total_a_cobrar) - Number(c.monto_pagado);
-    if (aPagar <= 0) return;
-
-    const { error: e2 } = await supabase
-      .from('cuotas').update({ monto_pagado: Number(c.total_a_cobrar) }).eq('id', cuotaId);
-    if (e2) return showToast('Error: ' + e2.message);
-
-    await supabase.from('pagos').insert({
-      socio_id: c.socio_id,
-      monto: aPagar,
-      metodo: 'manual',
-      referencia: 'admin-' + Date.now(),
-      cuotas_cubiertas: [cuotaId],
-      estado: 'confirmado',
-      fecha_confirmacion: new Date().toISOString(),
-      notas: 'Cuota marcada pagada desde el panel admin'
-    });
-    showToast('✓ Cuota marcada como pagada');
-    reloadAll();
+    if (busy) return;
+    setBusy(true);
+    try {
+      const { error } = await supabase.rpc('marcar_cuota_pagada', { p_cuota_id: cuotaId });
+      if (error) { showToast(friendlyError(error)); return; }
+      showToast('✓ Cuota marcada como pagada');
+      reloadAll();
+    } finally {
+      setBusy(false);
+    }
   };
 
   // Pago parcial — suma `monto` a monto_pagado (sin pasarse del total).
   const pagoParcial = async (cuotaId, monto) => {
     if (demoGuard()) return;
-    const { data: c, error: e1 } = await supabase
-      .from('cuotas').select('id, socio_id, total_a_cobrar, monto_pagado').eq('id', cuotaId).single();
-    if (e1 || !c) return showToast('Error: ' + (e1?.message || 'cuota no encontrada'));
-
-    const total = Number(c.total_a_cobrar);
-    const yaPagado = Number(c.monto_pagado);
-    const nuevoTotal = Math.min(yaPagado + Number(monto), total);
-    const aplicado = nuevoTotal - yaPagado;
-    if (aplicado <= 0) return showToast('La cuota ya está cubierta.');
-
-    const { error: e2 } = await supabase
-      .from('cuotas').update({ monto_pagado: nuevoTotal }).eq('id', cuotaId);
-    if (e2) return showToast('Error: ' + e2.message);
-
-    await supabase.from('pagos').insert({
-      socio_id: c.socio_id,
-      monto: aplicado,
-      metodo: 'manual',
-      referencia: 'admin-parcial-' + Date.now(),
-      cuotas_cubiertas: [cuotaId],
-      estado: 'confirmado',
-      fecha_confirmacion: new Date().toISOString(),
-      notas: 'Pago parcial registrado desde el panel admin'
-    });
-    showToast('✓ Pago parcial de $' + aplicado.toLocaleString('es-AR') + ' registrado');
-    reloadAll();
+    if (busy) return;
+    setBusy(true);
+    try {
+      const { error } = await supabase.rpc('pagar_cuota_parcial', {
+        p_cuota_id: cuotaId,
+        p_monto: Number(monto)
+      });
+      if (error) { showToast(friendlyError(error)); return; }
+      showToast('✓ Pago parcial de $' + Number(monto).toLocaleString('es-AR') + ' registrado');
+      reloadAll();
+    } finally {
+      setBusy(false);
+    }
   };
 
   // Crea una cuota one-off (multa, inscripción, ajuste).
   const agregarCuota = async ({ mes, anio, monto, fecha_vencimiento }) => {
     if (!addCuotaFor) return;
     if (DEMO_MODE) { setAddCuotaFor(null); return showToast('Cuota agregada (demo)'); }
-    const { error } = await supabase.from('cuotas').insert({
-      socio_id: addCuotaFor.profile_id,
-      mes, anio, monto,
-      fecha_vencimiento
-    });
-    if (error) {
-      const msg = error.message.includes('cuotas_socio_id_anio_mes_key')
-        ? 'Ya existe una cuota para ese mes/año.'
-        : error.message;
-      return showToast('Error: ' + msg);
+    if (busy) return;
+    setBusy(true);
+    try {
+      const { error } = await supabase.from('cuotas').insert({
+        socio_id: addCuotaFor.profile_id,
+        mes, anio, monto,
+        fecha_vencimiento
+      });
+      if (error) { showToast(friendlyError(error)); return; }
+      showToast('✓ Cuota agregada');
+      setAddCuotaFor(null);
+      reloadAll();
+    } finally {
+      setBusy(false);
     }
-    showToast('✓ Cuota agregada');
-    setAddCuotaFor(null);
-    reloadAll();
   };
 
   // Genera cuota del mes en curso para todos los activos que no la tengan.
@@ -1983,12 +2017,21 @@ function PortalAdmin({ onLogout }) {
   // las cuotas afectadas a mano (mostramos un mensaje claro).
   const anularPago = async (pagoId) => {
     if (!pagoId) return;
-    if (!confirm('¿Seguro que querés anular este pago? Vas a tener que ajustar las cuotas a mano.')) return;
-    if (DEMO_MODE) { setPagos((p) => p.map((x) => x.id === pagoId ? { ...x, estado: 'anulado' } : x)); return showToast('Pago anulado (demo)'); }
-    const { error } = await supabase.from('pagos').update({ estado: 'anulado' }).eq('id', pagoId);
-    if (error) return showToast('Error: ' + error.message);
-    showToast('✓ Pago anulado. Revisá las cuotas afectadas.');
-    reloadAll();
+    if (!confirm('¿Seguro que querés anular este pago?\n\nLas cuotas asociadas vuelven a quedar con saldo pendiente (las que cobrara este pago se descuentan automáticamente).')) return;
+    if (DEMO_MODE) {
+      setPagos((p) => p.map((x) => x.id === pagoId ? { ...x, estado: 'anulado' } : x));
+      return showToast('Pago anulado (demo)');
+    }
+    if (busy) return;
+    setBusy(true);
+    try {
+      const { error } = await supabase.rpc('anular_pago', { p_pago_id: pagoId });
+      if (error) { showToast(friendlyError(error)); return; }
+      showToast('✓ Pago anulado. Cuotas revertidas.');
+      reloadAll();
+    } finally {
+      setBusy(false);
+    }
   };
 
   const exportSocios = () => {
@@ -2292,18 +2335,18 @@ function PortalAdmin({ onLogout }) {
                     onChange={(e) => setBulkMonto(e.target.value)}
                     className="admin-bulkbar__input"
                   />
-                  <button type="button" className="admin-toolbar__btn" onClick={aplicarCuotaBulk}>
+                  <button type="button" className="admin-toolbar__btn" onClick={aplicarCuotaBulk} disabled={busy}>
                     {String(bulkMonto).trim() === ''
                       ? `Quitar cuota personalizada (${selectedIds.size})`
                       : `Asignar $${Number(bulkMonto).toLocaleString('es-AR')} a ${selectedIds.size}`}
                   </button>
-                  <button type="button" className="admin-toolbar__btn admin-toolbar__btn--ghost" onClick={generarCuotaMesBulk} title="Crea la cuota del mes en curso para los seleccionados">
+                  <button type="button" className="admin-toolbar__btn admin-toolbar__btn--ghost" onClick={generarCuotaMesBulk} disabled={busy} title="Crea la cuota del mes en curso para los seleccionados">
                     Generar cuota del mes ({selectedIds.size})
                   </button>
-                  <button type="button" className="admin-toolbar__btn admin-toolbar__btn--ghost" onClick={() => pausarBulk(true)} title="Los pausados se saltean al generar cuotas">
+                  <button type="button" className="admin-toolbar__btn admin-toolbar__btn--ghost" onClick={() => pausarBulk(true)} disabled={busy} title="Los pausados se saltean al generar cuotas">
                     ⏸ Pausar cuota ({selectedIds.size})
                   </button>
-                  <button type="button" className="admin-toolbar__btn admin-toolbar__btn--ghost" onClick={() => pausarBulk(false)}>
+                  <button type="button" className="admin-toolbar__btn admin-toolbar__btn--ghost" onClick={() => pausarBulk(false)} disabled={busy}>
                     ▶ Reanudar ({selectedIds.size})
                   </button>
                   <button type="button" className="admin-btn admin-btn--ghost" onClick={clearSelection}>✕ Limpiar</button>
@@ -2362,7 +2405,7 @@ function PortalAdmin({ onLogout }) {
                     <span data-label="Último pago">{s.ultPago}</span>
                     <span data-label="Acciones" className="admin-table__actions" onClick={(e) => e.stopPropagation()}>
                       {s.adeuda > 0 && (
-                        <button type="button" className="admin-btn admin-btn--xs admin-btn--ok" onClick={() => marcarCuotaPagada(s.socio_id)} title="Marcar deuda como pagada">✓ Pagar</button>
+                        <button type="button" className="admin-btn admin-btn--xs admin-btn--ok" onClick={() => marcarCuotaPagada(s.socio_id)} disabled={busy} title="Marcar deuda como pagada">✓ Pagar</button>
                       )}
                       {s.adeuda > 0 && phone && (
                         <a
@@ -2373,8 +2416,8 @@ function PortalAdmin({ onLogout }) {
                         >📩 Recordar</a>
                       )}
                       {s.estado === 'activo'
-                        ? <button type="button" className="admin-btn admin-btn--xs admin-btn--ghost" onClick={() => desactivarSocio(s.socio_id)}>Desactivar</button>
-                        : <button type="button" className="admin-btn admin-btn--xs admin-btn--ghost" onClick={() => reactivarSocio(s.socio_id)}>Reactivar</button>
+                        ? <button type="button" className="admin-btn admin-btn--xs admin-btn--ghost" onClick={() => desactivarSocio(s.socio_id)} disabled={busy}>Desactivar</button>
+                        : <button type="button" className="admin-btn admin-btn--xs admin-btn--ghost" onClick={() => reactivarSocio(s.socio_id)} disabled={busy}>Reactivar</button>
                       }
                     </span>
                   </div>
@@ -2450,7 +2493,7 @@ function PortalAdmin({ onLogout }) {
                     </span>
                     <span data-label="Acciones" className="admin-table__actions">
                       {p.estado === 'confirmado' && (
-                        <button type="button" className="admin-btn admin-btn--xs admin-btn--ghost" onClick={() => anularPago(p.id)}>
+                        <button type="button" className="admin-btn admin-btn--xs admin-btn--ghost" onClick={() => anularPago(p.id)} disabled={busy}>
                           Anular
                         </button>
                       )}
@@ -2478,11 +2521,13 @@ function PortalAdmin({ onLogout }) {
         <DetalleSocioModal
           socio={detalleSocio}
           pagos={pagos.filter((p) => p.socio_id === detalleSocio.socio_id)}
+          busy={busy}
           onClose={() => setDetalleSocio(null)}
           onMarcarPagada={() => { marcarCuotaPagada(detalleSocio.socio_id); setDetalleSocio(null); }}
           onDesactivar={() => { desactivarSocio(detalleSocio.socio_id); setDetalleSocio(null); }}
           onReactivar={() => { reactivarSocio(detalleSocio.socio_id); setDetalleSocio(null); }}
           onTogglePausa={() => { togglePausaCuota(detalleSocio.socio_id); setDetalleSocio(null); }}
+          onEliminar={() => { eliminarSocioDefinitivo(detalleSocio.socio_id); setDetalleSocio(null); }}
           onEdit={() => { setEditSocio(detalleSocio); setDetalleSocio(null); }}
           onAddCuota={() => { setAddCuotaFor(detalleSocio); setDetalleSocio(null); }}
           onResendInvite={() => reenviarInvitacion(detalleSocio)}
@@ -2629,8 +2674,8 @@ function AdminConfig({ config, onSave, onGenerarCuotasMes, generandoCuotas, acti
 // DetalleSocioModal — info completa de un socio + acciones rápidas
 // ============================================================
 function DetalleSocioModal({
-  socio, pagos, onClose,
-  onMarcarPagada, onDesactivar, onReactivar, onTogglePausa,
+  socio, pagos, busy, onClose,
+  onMarcarPagada, onDesactivar, onReactivar, onTogglePausa, onEliminar,
   onEdit, onAddCuota, onResendInvite,
   onMarcarCuotaPagada, onPagoParcial
 }) {
@@ -2818,7 +2863,7 @@ function DetalleSocioModal({
 
         <footer className="admin-detalle__actions">
           {socio.adeuda > 0 && (
-            <button type="button" className="admin-btn admin-btn--ok" onClick={onMarcarPagada}>
+            <button type="button" className="admin-btn admin-btn--ok" onClick={onMarcarPagada} disabled={busy}>
               ✓ Marcar toda la deuda pagada
             </button>
           )}
@@ -2835,8 +2880,13 @@ function DetalleSocioModal({
             {socio.cuota_pausada ? '▶ Reanudar cuota' : '⏸ Pausar cuota'}
           </button>
           {socio.estado === 'activo'
-            ? <button type="button" className="admin-btn admin-btn--ghost" onClick={onDesactivar}>Desactivar</button>
-            : <button type="button" className="admin-btn admin-btn--ghost" onClick={onReactivar}>Reactivar</button>}
+            ? <button type="button" className="admin-btn admin-btn--ghost" onClick={onDesactivar} disabled={busy}>Desactivar</button>
+            : <button type="button" className="admin-btn admin-btn--ghost" onClick={onReactivar} disabled={busy}>Reactivar</button>}
+          {onEliminar && (
+            <button type="button" className="admin-btn admin-btn--danger" onClick={onEliminar} disabled={busy} title="Borra DEFINITIVAMENTE al socio y todos sus datos (Ley 25.326).">
+              🗑 Eliminar definitivamente
+            </button>
+          )}
         </footer>
       </div>
     </div>
@@ -3774,6 +3824,7 @@ function Contact() {
 // ============================================================
 function Footer() {
   const year = new Date().getFullYear();
+  const [privacyOpen, setPrivacyOpen] = useState(false);
   return (
     <footer className="footer">
       <div className="container">
@@ -3803,10 +3854,78 @@ function Footer() {
 
         <div className="footer__bottom">
           <p>© {year} Club S. y D. Agronomía Central. Todos los derechos reservados.</p>
-          <p className="footer__league">Participa en <strong>LAAMBA</strong> · Liga B · División de Honor</p>
+          <p className="footer__league">
+            Participa en <strong>LAAMBA</strong> · Liga B · División de Honor
+            {' · '}
+            <button type="button" className="footer__legal-link" onClick={() => setPrivacyOpen(true)}>
+              Política de privacidad
+            </button>
+          </p>
         </div>
       </div>
+      {privacyOpen && <PrivacyModal onClose={() => setPrivacyOpen(false)} />}
     </footer>
+  );
+}
+
+// ============================================================
+// Política de privacidad (Ley 25.326)
+// ============================================================
+function PrivacyModal({ onClose }) {
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => { document.body.style.overflow = ''; window.removeEventListener('keydown', onKey); };
+  }, [onClose]);
+
+  const mailto = 'mailto:agronomiaarg.01@gmail.com?subject=' + encodeURIComponent('Pedido de datos personales — Ley 25.326');
+
+  return (
+    <div className="modal" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="privacyTitle">
+      <div className="modal__box modal__box--wide privacy" onClick={(e) => e.stopPropagation()}>
+        <button type="button" className="modal__close" onClick={onClose} aria-label="Cerrar">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+        <div className="modal__header">
+          <h2 id="privacyTitle">Política de privacidad</h2>
+          <p>Cómo tratamos tus datos. Cumplimos con la Ley 25.326 de Protección de Datos Personales (Argentina).</p>
+        </div>
+        <div className="privacy__body">
+          <h3>1. Qué datos guardamos</h3>
+          <p>De cada socio almacenamos: nombre y apellido, email, DNI, teléfono, categoría, número de socio, dorsal opcional, y el historial de cuotas y pagos.</p>
+
+          <h3>2. Para qué los usamos</h3>
+          <p>Únicamente para administrar la membresía del club: cobranza de cuotas, comunicación de partidos y actividades, y contacto en caso de necesidad. <strong>No los compartimos con terceros</strong> ni los usamos para publicidad.</p>
+
+          <h3>3. Dónde se almacenan</h3>
+          <p>Los datos viven en Supabase (Postgres en servidores de la región Sudamérica). Los pagos manuales se registran ahí. No procesamos tarjetas de crédito en este sitio.</p>
+
+          <h3>4. Quién tiene acceso</h3>
+          <p>Solo el personal administrativo del club autorizado (admins). Cada socio ve únicamente sus propios datos y cuotas.</p>
+
+          <h3>5. Tus derechos</h3>
+          <p>Tenés derecho a:</p>
+          <ul>
+            <li><strong>Acceso</strong>: pedir una copia de todos los datos que guardamos sobre vos.</li>
+            <li><strong>Rectificación</strong>: corregir datos incorrectos.</li>
+            <li><strong>Supresión</strong>: pedir que borremos definitivamente tu cuenta y todos tus datos asociados (cuotas, pagos, historial).</li>
+            <li><strong>Oposición</strong>: pedir que dejemos de procesar tus datos para un fin específico.</li>
+          </ul>
+
+          <h3>6. Cómo ejercer estos derechos</h3>
+          <p>Mandanos un mail a <a href={mailto}>agronomiaarg.01@gmail.com</a> con tu nombre, DNI y qué querés que hagamos. Te respondemos dentro de los 10 días hábiles (art. 14 Ley 25.326).</p>
+
+          <h3>7. Retención</h3>
+          <p>Los datos de socios activos se conservan mientras la membresía esté vigente. Los datos de socios desactivados se conservan hasta 24 meses por motivos contables, y después se eliminan.</p>
+
+          <h3>8. Responsable</h3>
+          <p>Club S. y D. Agronomía Central, Bauness 958, Parque Chas, CABA. Inscripto como responsable de bases de datos personales ante la AAIP (Agencia de Acceso a la Información Pública) — Ley 25.326.</p>
+
+          <p className="privacy__updated">Última actualización: {new Date().toLocaleDateString('es-AR', { month: 'long', year: 'numeric' })}</p>
+        </div>
+      </div>
+    </div>
   );
 }
 
