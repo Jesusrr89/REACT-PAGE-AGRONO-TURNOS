@@ -46,15 +46,10 @@ function Navbar({ onLoginClick, onAdminClick, loggedUser, onLogout }) {
     return () => { document.body.style.overflow = ''; };
   }, [menuOpen]);
 
+  // Landing reducida a una sola pantalla (Hero). El menú se queda solo con
+  // el ancla a Inicio + los CTAs de auth.
   const links = [
-    { href: '#inicio', label: 'Inicio' },
-    { href: '#nosotros', label: 'Nosotros' },
-    { href: '#plantel', label: 'Plantel' },
-    { href: '#coordinador', label: 'Coordinador' },
-    { href: '#instalaciones', label: 'Instalaciones' },
-    { href: '#fixture', label: 'Fixture' },
-    { href: '#sumate', label: 'Sumate' },
-    { href: '#contacto', label: 'Contacto' }
+    { href: '#inicio', label: 'Inicio' }
   ];
 
   const close = () => setMenuOpen(false);
@@ -3140,7 +3135,6 @@ function Hero({ onLoginClick, onAdminClick, loggedUser }) {
               </button>
             </>
           )}
-          {!loggedUser && <a href="#sumate" className="hero__btn hero__btn--ghost">Sumate al plantel</a>}
         </div>
 
         <div className="hero__stats reveal">
@@ -3158,10 +3152,6 @@ function Hero({ onLoginClick, onAdminClick, loggedUser }) {
           </div>
         </div>
       </div>
-
-      <a href="#nosotros" className="hero__scroll" aria-label="Desplazar hacia abajo">
-        <span></span>
-      </a>
     </section>
   );
 }
@@ -3800,24 +3790,6 @@ function Footer() {
 
           <div className="footer__cols">
             <div className="footer__col">
-              <h4>Navegación</h4>
-              <ul>
-                <li><a href="#inicio">Inicio</a></li>
-                <li><a href="#nosotros">Nosotros</a></li>
-                <li><a href="#plantel">Plantel</a></li>
-                <li><a href="#coordinador">Coordinador</a></li>
-              </ul>
-            </div>
-            <div className="footer__col">
-              <h4>El club</h4>
-              <ul>
-                <li><a href="#instalaciones">Instalaciones</a></li>
-                <li><a href="#fixture">Fixture</a></li>
-                <li><a href="#sumate">Sumate</a></li>
-                <li><a href="#contacto">Contacto</a></li>
-              </ul>
-            </div>
-            <div className="footer__col">
               <h4>Contacto</h4>
               <ul>
                 <li>Bauness 958</li>
@@ -3981,14 +3953,13 @@ export default function App() {
           />
         )}
         {mode === 'admin' && <PortalAdmin onLogout={handleLogout} />}
-        <About />
-        <Team />
-        <Coordinator />
-        <Facilities />
-        <Fixture />
-        <Gallery />
-        <JoinUs />
-        <Contact />
+        {/*
+          Landing reducida a una sola pantalla (Hero).
+          Los componentes About / Team / Coordinator / Facilities / Fixture /
+          Gallery / JoinUs / Contact siguen definidos abajo en este archivo —
+          si en algún momento querés reactivar alguno, agregá <Componente />
+          acá y volvé a sumar su entrada en `links` (línea ~50).
+        */}
       </main>
       <Footer />
 
