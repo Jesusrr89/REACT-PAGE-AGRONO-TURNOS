@@ -3,6 +3,7 @@ dist/
 .vite/
 .env
 .env.local
+.env.production
 *.log
 .DS_Store
 ac-hostinger.zip

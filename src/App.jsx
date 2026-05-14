@@ -10,7 +10,6 @@ import {
   loginUser,
   logoutUser,
   requestPasswordReset,
-  confirmPasswordReset,
   refreshSession,
   createPayment,
   confirmPayment,
@@ -19,7 +18,6 @@ import {
   buildCartWhatsappLink,
   describeError
 } from './utils/api.js';
-import { saveSession, loadSession, clearSession } from './utils/session.js';
 import { supabase, initialAuthIntent } from './utils/supabase.js';
 
 // ============================================================
@@ -314,11 +312,11 @@ function SetPasswordModal({ open, intent, onSuccess }) {
     : 'Para terminar tu alta, elegí una contraseña que vas a usar para entrar al portal.';
 
   return (
-    <div className="modal" role="dialog" aria-modal="true">
+    <div className="modal" role="dialog" aria-modal="true" aria-labelledby="setPassTitle">
       <div className="modal__box" onClick={(e) => e.stopPropagation()}>
         <div className="modal__header">
           <img src="/media/logo.jpeg" alt="AC" className="modal__logo" />
-          <h2>{titulo}</h2>
+          <h2 id="setPassTitle">{titulo}</h2>
           <p>{sub}</p>
         </div>
         <form className="modal__form" onSubmit={handleSubmit} noValidate>
@@ -360,11 +358,12 @@ function SetPasswordModal({ open, intent, onSuccess }) {
 // RESET PASSWORD MODAL — pedir mail de recovery
 // ============================================================
 function ResetPasswordModal({ open, onClose, onSwitchToLogin }) {
-  const [step, setStep] = useState('request'); // request | confirm | success
+  // Flujo Supabase: el usuario ingresa su mail -> le llega un LINK al mail
+  // (no un código). Al clickear el link vuelve al sitio con ?type=recovery y
+  // se abre SetPasswordModal automáticamente (manejado vía initialAuthIntent).
+  // Acá solo pedimos el mail y mostramos confirmación.
+  const [step, setStep] = useState('request'); // request | sent
   const [email, setEmail] = useState('');
-  const [code, setCode] = useState('');
-  const [pass, setPass] = useState('');
-  const [pass2, setPass2] = useState('');
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -372,8 +371,7 @@ function ResetPasswordModal({ open, onClose, onSwitchToLogin }) {
   useEffect(() => { document.body.style.overflow = open ? 'hidden' : ''; return () => { document.body.style.overflow = ''; }; }, [open]);
   useEffect(() => {
     if (!open) {
-      setStep('request'); setEmail(''); setCode(''); setPass(''); setPass2('');
-      setError(''); setInfo(''); setSubmitting(false);
+      setStep('request'); setEmail(''); setError(''); setInfo(''); setSubmitting(false);
     }
   }, [open]);
   useEffect(() => {
@@ -397,25 +395,8 @@ function ResetPasswordModal({ open, onClose, onSwitchToLogin }) {
     setSubmitting(false);
     if (res && res.ok) {
       setEmail(emailClean);
-      setInfo(res.message || 'Te mandamos un código a tu mail (si está registrado). Revisá tu casilla y pegalo abajo.');
-      setStep('confirm');
-    } else {
-      setError(describeError(res && res.error));
-    }
-  };
-
-  const handleConfirm = async (e) => {
-    e.preventDefault();
-    setError('');
-    if (!/^\d{6}$/.test(code.trim())) { setError('El código son 6 dígitos.'); return; }
-    if (pass.length < 8) { setError('La contraseña tiene que tener al menos 8 caracteres.'); return; }
-    if (pass !== pass2) { setError('Las contraseñas no coinciden.'); return; }
-
-    setSubmitting(true);
-    const res = await confirmPasswordReset(email, code.trim(), pass);
-    setSubmitting(false);
-    if (res && res.ok) {
-      setStep('success');
+      setInfo(res.message || 'Si el email está registrado, te llegará un link en unos minutos. Abrilo desde el mismo dispositivo donde querés ingresar.');
+      setStep('sent');
     } else {
       setError(describeError(res && res.error));
     }
@@ -430,75 +411,41 @@ function ResetPasswordModal({ open, onClose, onSwitchToLogin }) {
           </svg>
         </button>
 
-        {step === 'success' ? (
+        {step === 'sent' ? (
           <div className="modal__success">
             <div className="modal__success-icon">
               <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                <path d="M20 6 9 17l-5-5"/>
+                <path d="M22 6 12 13 2 6"/><path d="M2 6h20v12H2z"/>
               </svg>
             </div>
-            <h3>¡Contraseña actualizada!</h3>
-            <p>Ya podés ingresar al portal con tu nueva contraseña.</p>
-            <button type="button" className="modal__submit" onClick={onSwitchToLogin}>Ir a ingresar</button>
+            <h3>Revisá tu mail</h3>
+            <p>{info}</p>
+            <p className="modal__disclaimer">Si no te llega en 5 minutos, revisá la carpeta de spam o probá de nuevo.</p>
+            <button type="button" className="modal__submit" onClick={onSwitchToLogin}>Volver a ingresar</button>
           </div>
         ) : (
           <>
             <div className="modal__header">
               <img src="/media/logo.jpeg" alt="AC" className="modal__logo" />
               <h2 id="resetTitle">Restablecer contraseña</h2>
-              <p>
-                {step === 'request'
-                  ? 'Ingresá tu email y te mandamos un código para crear una contraseña nueva.'
-                  : 'Pegá el código que te llegó al mail y elegí tu nueva contraseña.'}
-              </p>
+              <p>Ingresá tu email y te mandamos un link para crear una contraseña nueva.</p>
             </div>
 
-            {step === 'request' ? (
-              <form className="modal__form" onSubmit={handleRequest} noValidate>
-                <div className="modal__field">
-                  <label htmlFor="reset-email">Email</label>
-                  <input id="reset-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)}
-                    maxLength={120} autoComplete="email" autoFocus />
-                </div>
-                {error && <div className="modal__error">{error}</div>}
-                <button type="submit" className="modal__submit" disabled={submitting}>
-                  {submitting ? 'Enviando…' : 'Enviarme el código'}
-                </button>
-                <div className="modal__switch">
-                  ¿Te acordaste?{' '}
-                  <button type="button" onClick={onSwitchToLogin}>Volver a ingresar</button>
-                </div>
-              </form>
-            ) : (
-              <form className="modal__form" onSubmit={handleConfirm} noValidate>
-                {info && <div className="modal__info">{info}</div>}
-                <div className="modal__field">
-                  <label htmlFor="reset-code">Código de 6 dígitos</label>
-                  <input id="reset-code" type="text" inputMode="numeric" value={code}
-                    onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                    maxLength={6} placeholder="123456" autoFocus autoComplete="one-time-code" />
-                </div>
-                <div className="modal__field">
-                  <label htmlFor="reset-pass">Nueva contraseña</label>
-                  <input id="reset-pass" type="password" value={pass} onChange={(e) => setPass(e.target.value)}
-                    maxLength={100} autoComplete="new-password" />
-                </div>
-                <div className="modal__field">
-                  <label htmlFor="reset-pass2">Repetir contraseña</label>
-                  <input id="reset-pass2" type="password" value={pass2} onChange={(e) => setPass2(e.target.value)}
-                    maxLength={100} autoComplete="new-password" />
-                </div>
-                {error && <div className="modal__error">{error}</div>}
-                <button type="submit" className="modal__submit" disabled={submitting}>
-                  {submitting ? 'Actualizando…' : 'Cambiar contraseña'}
-                </button>
-                <div className="modal__switch">
-                  <button type="button" onClick={() => { setStep('request'); setError(''); setInfo(''); setCode(''); setPass(''); setPass2(''); }}>
-                    Pedir otro código
-                  </button>
-                </div>
-              </form>
-            )}
+            <form className="modal__form" onSubmit={handleRequest} noValidate>
+              <div className="modal__field">
+                <label htmlFor="reset-email">Email</label>
+                <input id="reset-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+                  maxLength={120} autoComplete="email" autoFocus />
+              </div>
+              {error && <div className="modal__error">{error}</div>}
+              <button type="submit" className="modal__submit" disabled={submitting}>
+                {submitting ? 'Enviando…' : 'Enviarme el link'}
+              </button>
+              <div className="modal__switch">
+                ¿Te acordaste?{' '}
+                <button type="button" onClick={onSwitchToLogin}>Volver a ingresar</button>
+              </div>
+            </form>
           </>
         )}
       </div>
@@ -565,8 +512,10 @@ function buildDemoSocios(n = 150) {
     const nombre = _pick(DEMO_NOMBRES) + ' ' + _pick(DEMO_APELLIDOS);
     const activo = Math.random() > 0.1;
     const adeuda = activo && Math.random() > 0.5 ? _pick([15000, 30000, 45000, 18000, 33000, 12000]) : 0;
+    const numSocio = 'AC-' + String(1001 + i);
     out.push({
-      socio_id: 'AC-' + String(1001 + i),
+      socio_id: numSocio,
+      numero_socio: numSocio,
       profile_id: 'demo-' + i,
       nombre,
       email: _slug(nombre) + (i + 1) + '@mail.com',
@@ -575,6 +524,7 @@ function buildDemoSocios(n = 150) {
       categoria: CATEGORIAS_FLAT[i % CATEGORIAS_FLAT.length],
       telefono: '11' + String(30000000 + Math.floor(Math.random() * 69999999)),
       cuota_monto: Math.random() > 0.7 ? _pick([8000, 12000, 18000, 20000, 25000]) : null,
+      cuota_pausada: Math.random() > 0.92,
       estado: activo ? 'activo' : 'desactivado',
       adeuda,
       ultPago: Math.random() > 0.25 ? new Date(Date.now() - Math.floor(Math.random() * 120) * 86400000).toLocaleDateString('es-AR') : '—',
@@ -589,6 +539,7 @@ function buildDemoPagos(socios, n = 60) {
     const s = _pick(socios);
     const d = new Date(Date.now() - Math.floor(Math.random() * 90) * 86400000 - Math.floor(Math.random() * 86400000));
     out.push({
+      id: 'demo-pago-' + i,
       fecha: d.toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }),
       fecha_iso: d.toISOString(),
       socio_id: s.socio_id,
@@ -705,62 +656,7 @@ function PaymentBanner({ status, onClose }) {
   );
 }
 
-function PortalPendiente({ user, config }) {
-  const wa = buildWhatsappLink(config, user, null);
-  const tel = config.telefono_secretaria || '+541145242225';
-  return (
-    <section id="portal" className="portal portal--pending">
-      <div className="container">
-        <div className="portal-pending reveal">
-          <div className="portal-pending__icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-              <circle cx="12" cy="12" r="10"/>
-              <path d="M12 7v5l3 2"/>
-            </svg>
-          </div>
-          <span className="section-eyebrow section-eyebrow--light">Tu solicitud está en revisión</span>
-          <h2 className="section-title section-title--light">
-            Hola, <span className="accent">{(user.nombre || '').split(' ')[0]}</span>.
-          </h2>
-          <p className="portal-pending__lead">
-            Recibimos tu solicitud de alta como socio. La secretaría va a verificar tus datos
-            y te va a contactar al teléfono que dejaste para confirmar tu cuenta.
-          </p>
-          <div className="portal-pending__data">
-            <div><span>Email registrado</span><strong>{user.email}</strong></div>
-            {user.telefono && <div><span>Teléfono de contacto</span><strong>{user.telefono}</strong></div>}
-            {user.categoria && <div><span>Categoría solicitada</span><strong>{user.categoria}</strong></div>}
-          </div>
-          <p className="portal-pending__hint">
-            Una vez aprobada, vas a poder ver tu estado de cuenta, pagar tus cuotas con Mercado Pago y todas las funciones del portal.
-            Normalmente toma 24-48hs hábiles.
-          </p>
-          <div className="portal-pending__actions">
-            {wa && (
-              <a href={wa} target="_blank" rel="noopener noreferrer" className="portal-pending__btn portal-pending__btn--wa">
-                <WhatsappIcon size={20} />
-                <span>Acelerar por WhatsApp</span>
-              </a>
-            )}
-            <a href={'tel:' + String(tel).replace(/[^\d+]/g, '')} className="portal-pending__btn">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-                <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
-              </svg>
-              <span>Llamar al club</span>
-            </a>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
 function PortalSocio({ user, cuotas, config, token, onSessionUpdate }) {
-  // Cuenta en revisión: portal limitado, sin estado de cuenta ni carrito
-  if (user.estado_cuenta === 'pendiente') {
-    return <PortalPendiente user={user} config={config} />;
-  }
-
   const cuotasOrdenadas = sortCuotasDesc(cuotas);
   // "deudoras" = cuotas que tienen saldo (pendientes + parciales)
   const deudoras = cuotasOrdenadas.filter((c) => c.estado !== 'pagado');
@@ -1590,6 +1486,7 @@ function PortalAdmin({ onLogout }) {
       const ultFecha = fechasPago[fechasPago.length - 1];
       return {
         socio_id: p.numero_socio || p.id.slice(0, 8),
+        numero_socio: p.numero_socio || '',
         profile_id: p.id,
         nombre: p.nombre,
         email: p.email || '',
@@ -1598,6 +1495,7 @@ function PortalAdmin({ onLogout }) {
         categoria: p.categoria || '',
         telefono: p.telefono || '',
         cuota_monto: p.cuota_monto != null ? Number(p.cuota_monto) : null,
+        cuota_pausada: !!p.cuota_pausada,
         estado: p.estado,
         adeuda,
         ultPago: ultFecha ? new Date(ultFecha).toLocaleDateString('es-AR') : '—'
@@ -1609,6 +1507,7 @@ function PortalAdmin({ onLogout }) {
     const nombreById = new Map(sociosShaped.map((s) => [s.profile_id, s.nombre]));
     const sidById = new Map(sociosShaped.map((s) => [s.profile_id, s.socio_id]));
     setPagos((pagosRes.data || []).map((p) => ({
+      id: p.id,
       fecha: new Date(p.fecha).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }),
       fecha_iso: p.fecha,
       socio_id: sidById.get(p.socio_id) || '—',
@@ -1665,12 +1564,61 @@ function PortalAdmin({ onLogout }) {
     showToast('Socio reactivado');
   };
 
+  // Pausa o reanuda la cuota de un socio. Cuando está pausada, los generadores
+  // mensuales lo saltean. El socio sigue logueando normalmente; no es lo mismo
+  // que desactivar la cuenta.
+  const togglePausaCuota = async (sid) => {
+    const socio = findSocio(sid);
+    if (!socio) return;
+    const nueva = !socio.cuota_pausada;
+    if (DEMO_MODE) {
+      setSocios((p) => p.map((s) => s.socio_id === sid ? { ...s, cuota_pausada: nueva } : s));
+      return showToast(nueva ? 'Cuota pausada (demo)' : 'Cuota reanudada (demo)');
+    }
+    const { error } = await supabase.from('profiles').update({ cuota_pausada: nueva }).eq('id', socio.profile_id);
+    if (error) return showToast('Error: ' + error.message);
+    setSocios((p) => p.map((s) => s.socio_id === sid ? { ...s, cuota_pausada: nueva } : s));
+    showToast(nueva ? '✓ Cuota pausada' : '✓ Cuota reanudada');
+  };
+
+  // Pausa o reanuda en bulk para los seleccionados.
+  const pausarBulk = async (pausar) => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    if (DEMO_MODE) {
+      const set = new Set(ids);
+      setSocios((p) => p.map((s) => set.has(s.profile_id) ? { ...s, cuota_pausada: pausar } : s));
+      clearSelection();
+      return showToast(pausar ? `Cuota pausada en ${ids.length} socio(s) (demo)` : `Cuota reanudada en ${ids.length} socio(s) (demo)`);
+    }
+    const { error } = await supabase.from('profiles').update({ cuota_pausada: pausar }).in('id', ids);
+    if (error) return showToast('Error: ' + error.message);
+    showToast(pausar ? `✓ Cuota pausada en ${ids.length} socio(s)` : `✓ Cuota reanudada en ${ids.length} socio(s)`);
+    clearSelection();
+    reloadAll();
+  };
+
   // Marca como pagadas TODAS las cuotas pendientes del socio en una sola operación
   // y registra una fila en `pagos` como audit trail.
   const marcarCuotaPagada = async (sid) => {
     const socio = findSocio(sid);
     if (!socio || socio.adeuda === 0) return;
-    if (DEMO_MODE) { setSocios((p) => p.map((s) => s.socio_id === sid ? { ...s, adeuda: 0, ultPago: new Date().toLocaleDateString('es-AR') } : s)); return showToast('Pago registrado (demo)'); }
+    if (DEMO_MODE) {
+      const now = new Date();
+      setSocios((p) => p.map((s) => s.socio_id === sid ? { ...s, adeuda: 0, ultPago: now.toLocaleDateString('es-AR') } : s));
+      setPagos((prev) => [{
+        id: 'demo-pago-' + now.getTime(),
+        fecha: now.toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }),
+        fecha_iso: now.toISOString(),
+        socio_id: socio.socio_id,
+        socio: socio.nombre,
+        monto: socio.adeuda,
+        metodo: 'manual',
+        estado: 'confirmado',
+        ref: 'demo-' + now.getTime(),
+      }, ...prev]);
+      return showToast('Pago registrado (demo)');
+    }
 
     // Traer las cuotas pendientes del socio
     const { data: pendientes, error: e1 } = await supabase
@@ -1708,14 +1656,38 @@ function PortalAdmin({ onLogout }) {
   };
 
   const crearSocio = async (data) => {
-    if (demoGuard()) return;
+    if (DEMO_MODE) {
+      const id = 'demo-new-' + Date.now();
+      const cuotaMontoNum = data.cuota_monto === '' || data.cuota_monto == null ? null : Number(data.cuota_monto);
+      const numSocio = data.numero_socio || ('AC-' + Math.floor(Math.random() * 9000 + 1000));
+      const nuevo = {
+        socio_id: numSocio,
+        numero_socio: numSocio,
+        profile_id: id,
+        nombre: data.nombre,
+        email: data.email,
+        dni: (data.dni || '').replace(/\D/g, ''),
+        dorsal: data.dorsal || '',
+        categoria: data.categoria || '',
+        telefono: data.telefono || '',
+        cuota_monto: Number.isFinite(cuotaMontoNum) && cuotaMontoNum > 0 ? cuotaMontoNum : null,
+        cuota_pausada: false,
+        estado: 'activo',
+        adeuda: 0,
+        ultPago: '—',
+      };
+      setSocios((p) => [nuevo, ...p]);
+      setShowNewModal(false);
+      return showToast('Socio creado (demo)');
+    }
     // Llama a la Edge Function `invite-socio` que crea el auth.user + profile
     // y manda mail de invitación. Ver supabase/functions/invite-socio/.
+    const dniClean = String(data.dni || '').replace(/\D/g, '');
     const { data: res, error } = await supabase.functions.invoke('invite-socio', {
       body: {
         email: data.email,
         nombre: data.nombre,
-        dni: data.dni || null,
+        dni: dniClean || null,
         dorsal: data.dorsal ? Number(data.dorsal) : null,
         categoria: data.categoria || null,
         telefono: data.telefono || null,
@@ -1723,7 +1695,11 @@ function PortalAdmin({ onLogout }) {
       }
     });
     if (error || (res && res.error)) {
-      return showToast('Error al crear socio: ' + (res?.error || error?.message || 'desconocido'));
+      const code = res?.error || error?.message || 'desconocido';
+      const msg = code === 'dni_duplicado' ? 'Ya hay un socio con ese DNI.'
+        : code === 'numero_socio_duplicado' ? 'Ya hay un socio con ese número.'
+        : 'Error al crear socio: ' + code;
+      return showToast(msg);
     }
     setShowNewModal(false);
     showToast('✓ Socio creado y mail de invitación enviado');
@@ -1733,12 +1709,15 @@ function PortalAdmin({ onLogout }) {
   const editarSocio = async (data) => {
     if (!editSocio) return;
     const cuotaMontoNum = data.cuota_monto === '' || data.cuota_monto == null ? null : Number(data.cuota_monto);
+    const dniClean = String(data.dni || '').replace(/\D/g, '');
     if (DEMO_MODE) {
+      const numSocio = data.numero_socio || '';
       setSocios((p) => p.map((s) => s.profile_id === editSocio.profile_id ? {
         ...s, nombre: data.nombre, telefono: data.telefono || '', dorsal: data.dorsal || '',
-        categoria: data.categoria || '', dni: data.dni || s.dni,
-        cuota_monto: Number.isFinite(cuotaMontoNum) && cuotaMontoNum >= 0 ? cuotaMontoNum : null,
-        socio_id: data.numero_socio || s.socio_id,
+        categoria: data.categoria || '', dni: dniClean,
+        cuota_monto: Number.isFinite(cuotaMontoNum) && cuotaMontoNum > 0 ? cuotaMontoNum : null,
+        numero_socio: numSocio,
+        socio_id: numSocio || s.profile_id.slice(0, 8),
       } : s));
       setEditSocio(null);
       return showToast('Socio actualizado (demo)');
@@ -1749,9 +1728,9 @@ function PortalAdmin({ onLogout }) {
       dorsal: data.dorsal ? Number(data.dorsal) : null,
       categoria: data.categoria || null,
       numero_socio: data.numero_socio || null,
-      cuota_monto: Number.isFinite(cuotaMontoNum) && cuotaMontoNum >= 0 ? cuotaMontoNum : null
+      dni: dniClean || null,
+      cuota_monto: Number.isFinite(cuotaMontoNum) && cuotaMontoNum > 0 ? cuotaMontoNum : null
     };
-    if (data.dni) updates.dni = data.dni;
     const { error } = await supabase.from('profiles').update(updates).eq('id', editSocio.profile_id);
     if (error) return showToast('Error: ' + error.message);
     showToast('✓ Socio actualizado');
@@ -1779,7 +1758,7 @@ function PortalAdmin({ onLogout }) {
     if (ids.length === 0) return;
     const raw = String(bulkMonto).trim();
     const valor = raw === '' ? null : Number(raw);
-    if (valor != null && (!Number.isFinite(valor) || valor < 0)) return showToast('Monto inválido.');
+    if (valor != null && (!Number.isFinite(valor) || valor <= 0)) return showToast('El monto tiene que ser mayor a 0. Para pausar la cuota, usá el botón Pausar.');
     if (DEMO_MODE) {
       const set = new Set(ids);
       setSocios((p) => p.map((s) => set.has(s.profile_id) ? { ...s, cuota_monto: valor } : s));
@@ -1811,12 +1790,13 @@ function PortalAdmin({ onLogout }) {
     const fechaVenc = `${anio}-${String(mes).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
     const raw = String(bulkMonto).trim();
     const fijo = raw === '' ? null : Number(raw);
-    if (fijo != null && (!Number.isFinite(fijo) || fijo < 0)) return showToast('Monto inválido.');
+    if (fijo != null && (!Number.isFinite(fijo) || fijo <= 0)) return showToast('El monto tiene que ser mayor a 0.');
 
     const { data: yaTienen } = await supabase.from('cuotas').select('socio_id').eq('mes', mes).eq('anio', anio);
     const yaSet = new Set((yaTienen || []).map((c) => c.socio_id));
-    const target = socios.filter((s) => ids.has(s.profile_id) && !yaSet.has(s.profile_id));
-    if (target.length === 0) return showToast('Los seleccionados ya tienen cuota para este mes.');
+    // Saltea cuotas pausadas y los que ya tienen cuota del mes
+    const target = socios.filter((s) => ids.has(s.profile_id) && !s.cuota_pausada && !yaSet.has(s.profile_id));
+    if (target.length === 0) return showToast('Los seleccionados ya tienen cuota para este mes (o están pausados).');
 
     const rows = target.map((s) => ({
       socio_id: s.profile_id, mes, anio,
@@ -1919,8 +1899,8 @@ function PortalAdmin({ onLogout }) {
     const dia = Math.max(1, Math.min(28, Number(config.cuota_dia_vencimiento) || 10));
     const fechaVenc = `${anio}-${String(mes).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
 
-    // Activos sin cuota para ese mes
-    const activos = socios.filter((s) => s.estado === 'activo');
+    // Activos no pausados, sin cuota para ese mes
+    const activos = socios.filter((s) => s.estado === 'activo' && !s.cuota_pausada);
     const { data: yaTienen } = await supabase
       .from('cuotas').select('socio_id')
       .eq('mes', mes).eq('anio', anio);
@@ -1967,10 +1947,11 @@ function PortalAdmin({ onLogout }) {
 
   // Anula un pago: marca el pago como 'anulado'. La admin debe ajustar
   // las cuotas afectadas a mano (mostramos un mensaje claro).
-  const anularPago = async (pagoIso) => {
+  const anularPago = async (pagoId) => {
+    if (!pagoId) return;
     if (!confirm('¿Seguro que querés anular este pago? Vas a tener que ajustar las cuotas a mano.')) return;
-    if (DEMO_MODE) { setPagos((p) => p.map((x) => x.fecha_iso === pagoIso ? { ...x, estado: 'anulado' } : x)); return showToast('Pago anulado (demo)'); }
-    const { error } = await supabase.from('pagos').update({ estado: 'anulado' }).eq('fecha', pagoIso);
+    if (DEMO_MODE) { setPagos((p) => p.map((x) => x.id === pagoId ? { ...x, estado: 'anulado' } : x)); return showToast('Pago anulado (demo)'); }
+    const { error } = await supabase.from('pagos').update({ estado: 'anulado' }).eq('id', pagoId);
     if (error) return showToast('Error: ' + error.message);
     showToast('✓ Pago anulado. Revisá las cuotas afectadas.');
     reloadAll();
@@ -2010,18 +1991,27 @@ function PortalAdmin({ onLogout }) {
     showToast('✓ Configuración guardada');
   };
 
-  // Reset de paginación al cambiar filtros / búsqueda
-  useEffect(() => { setPage(1); }, [search, filterEstado, filterCat, tab]);
+  // Reset de paginación + selección al cambiar filtros / búsqueda. Si no
+  // limpiamos la selección, el admin podría aplicar un bulk a socios que ya
+  // no son visibles con el nuevo filtro.
+  useEffect(() => {
+    setPage(1);
+    setSelectedIds((prev) => (prev.size > 0 ? new Set() : prev));
+  }, [search, filterEstado, filterCat, tab]);
 
   const categorias = Array.from(new Set(socios.map((s) => s.categoria).filter(Boolean)));
   const sociosFiltrados = socios.filter((s) => {
     const q = search.toLowerCase().trim();
-    if (q && !(
-      s.nombre.toLowerCase().includes(q) ||
-      s.socio_id.toLowerCase().includes(q) ||
-      (s.email || '').toLowerCase().includes(q) ||
-      (s.dni || '').toLowerCase().includes(q)
-    )) return false;
+    // El DNI guardado ya está normalizado a dígitos: matcheamos la query
+    // también normalizada para que "12.345.678" encuentre "12345678".
+    const qDigits = q.replace(/\D/g, '');
+    if (q) {
+      const matchText = s.nombre.toLowerCase().includes(q)
+        || s.socio_id.toLowerCase().includes(q)
+        || (s.email || '').toLowerCase().includes(q);
+      const matchDni = qDigits && (s.dni || '').includes(qDigits);
+      if (!matchText && !matchDni) return false;
+    }
     if (filterEstado === 'activos' && s.estado !== 'activo') return false;
     if (filterEstado === 'desactivados' && s.estado !== 'desactivado') return false;
     if (filterEstado === 'al_dia' && !(s.estado === 'activo' && s.adeuda === 0)) return false;
@@ -2032,7 +2022,7 @@ function PortalAdmin({ onLogout }) {
   const pageSocios = sociosFiltrados.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const pageAllSelected = pageSocios.length > 0 && pageSocios.every((s) => selectedIds.has(s.profile_id));
 
-  const topDeudores = [...socios].filter((s) => s.adeuda > 0).sort((a, b) => b.adeuda - a.adeuda).slice(0, 5);
+  const topDeudores = [...socios].filter((s) => s.adeuda > 0 && s.estado === 'activo').sort((a, b) => b.adeuda - a.adeuda).slice(0, 5);
 
   return (
     <section id="admin" className="admin">
@@ -2162,8 +2152,8 @@ function PortalAdmin({ onLogout }) {
                   <span>Actividad reciente</span>
                 </div>
                 <ul className="admin-list">
-                  {pagos.slice(0, 6).map((p, i) => (
-                    <li key={i} className="admin-list__row">
+                  {pagos.slice(0, 6).map((p) => (
+                    <li key={p.id} className="admin-list__row">
                       <div>
                         <strong>{p.socio}</strong>
                         <span>{p.fecha} · {p.metodo.toUpperCase()}</span>
@@ -2247,6 +2237,12 @@ function PortalAdmin({ onLogout }) {
                   <button type="button" className="admin-toolbar__btn admin-toolbar__btn--ghost" onClick={generarCuotaMesBulk} title="Crea la cuota del mes en curso para los seleccionados">
                     Generar cuota del mes ({selectedIds.size})
                   </button>
+                  <button type="button" className="admin-toolbar__btn admin-toolbar__btn--ghost" onClick={() => pausarBulk(true)} title="Los pausados se saltean al generar cuotas">
+                    ⏸ Pausar cuota ({selectedIds.size})
+                  </button>
+                  <button type="button" className="admin-toolbar__btn admin-toolbar__btn--ghost" onClick={() => pausarBulk(false)}>
+                    ▶ Reanudar ({selectedIds.size})
+                  </button>
                   <button type="button" className="admin-btn admin-btn--ghost" onClick={clearSelection}>✕ Limpiar</button>
                 </div>
               )}
@@ -2295,6 +2291,7 @@ function PortalAdmin({ onLogout }) {
                       <span className={'admin-pill admin-pill--' + (s.estado === 'activo' ? (s.adeuda > 0 ? 'warn' : 'ok') : 'off')}>
                         {s.estado === 'desactivado' ? 'Desactivado' : (s.adeuda > 0 ? 'Con deuda' : 'Al día')}
                       </span>
+                      {s.cuota_pausada && <span className="admin-pill admin-pill--pausa" style={{ marginTop: 4 }}>⏸ Pausada</span>}
                     </span>
                     <span data-label="Adeudado" className="admin-table__num">
                       {s.adeuda > 0 ? <strong className="admin-text-warn">${s.adeuda.toLocaleString('es-AR')}</strong> : <em>—</em>}
@@ -2370,8 +2367,8 @@ function PortalAdmin({ onLogout }) {
                   <span className="admin-table__num">Monto</span>
                   <span>Acciones</span>
                 </div>
-                {pagos.map((p, i) => (
-                  <div key={i} className="admin-table__row">
+                {pagos.map((p) => (
+                  <div key={p.id} className="admin-table__row">
                     <span data-label="Fecha">{p.fecha}</span>
                     <span data-label="Socio"><strong>{p.socio}</strong><em>{p.socio_id}</em></span>
                     <span data-label="Método">
@@ -2386,7 +2383,7 @@ function PortalAdmin({ onLogout }) {
                     </span>
                     <span data-label="Acciones" className="admin-table__actions">
                       {p.estado === 'confirmado' && (
-                        <button type="button" className="admin-btn admin-btn--xs admin-btn--ghost" onClick={() => anularPago(p.fecha_iso)}>
+                        <button type="button" className="admin-btn admin-btn--xs admin-btn--ghost" onClick={() => anularPago(p.id)}>
                           Anular
                         </button>
                       )}
@@ -2418,6 +2415,7 @@ function PortalAdmin({ onLogout }) {
           onMarcarPagada={() => { marcarCuotaPagada(detalleSocio.socio_id); setDetalleSocio(null); }}
           onDesactivar={() => { desactivarSocio(detalleSocio.socio_id); setDetalleSocio(null); }}
           onReactivar={() => { reactivarSocio(detalleSocio.socio_id); setDetalleSocio(null); }}
+          onTogglePausa={() => { togglePausaCuota(detalleSocio.socio_id); setDetalleSocio(null); }}
           onEdit={() => { setEditSocio(detalleSocio); setDetalleSocio(null); }}
           onAddCuota={() => { setAddCuotaFor(detalleSocio); setDetalleSocio(null); }}
           onResendInvite={() => reenviarInvitacion(detalleSocio)}
@@ -2634,7 +2632,7 @@ function AdminConfig({ config, onSave }) {
 // ============================================================
 function DetalleSocioModal({
   socio, pagos, onClose,
-  onMarcarPagada, onDesactivar, onReactivar,
+  onMarcarPagada, onDesactivar, onReactivar, onTogglePausa,
   onEdit, onAddCuota, onResendInvite,
   onMarcarCuotaPagada, onPagoParcial
 }) {
@@ -2697,7 +2695,7 @@ function DetalleSocioModal({
   };
 
   return (
-    <div className="modal" onClick={onClose} role="dialog" aria-modal="true">
+    <div className="modal" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="detalleSocioTitle">
       <div className="modal__box modal__box--xl admin-detalle" onClick={(e) => e.stopPropagation()}>
         <button type="button" className="modal__close" onClick={onClose} aria-label="Cerrar">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
@@ -2707,7 +2705,7 @@ function DetalleSocioModal({
           <div className="admin-detalle__avatar">{initials}</div>
           <div className="admin-detalle__head-text">
             <span className="admin-detalle__id">{socio.socio_id}</span>
-            <h2>{socio.nombre}</h2>
+            <h2 id="detalleSocioTitle">{socio.nombre}</h2>
             <span className={'admin-pill admin-pill--' + estadoClass}>{estadoLabel}</span>
           </div>
         </header>
@@ -2726,7 +2724,11 @@ function DetalleSocioModal({
               <div><dt>Teléfono</dt><dd>{socio.telefono || '—'}</dd></div>
               <div><dt>Categoría</dt><dd>{socio.categoria || '—'}</dd></div>
               <div><dt>Dorsal</dt><dd>{socio.dorsal ? '#' + socio.dorsal : '—'}</dd></div>
-              <div><dt>Cuota del socio</dt><dd>{socio.cuota_monto != null ? '$' + socio.cuota_monto.toLocaleString('es-AR') : 'General'}</dd></div>
+              <div><dt>Cuota del socio</dt><dd>{
+                socio.cuota_pausada
+                  ? <span className="admin-pill admin-pill--pausa">⏸ Pausada</span>
+                  : (socio.cuota_monto != null ? '$' + socio.cuota_monto.toLocaleString('es-AR') : 'General')
+              }</dd></div>
               <div><dt>Último pago</dt><dd>{socio.ultPago || '—'}</dd></div>
               <div><dt>Saldo</dt><dd>{socio.adeuda > 0 ? <strong className="admin-text-warn">${socio.adeuda.toLocaleString('es-AR')}</strong> : '$0 (al día)'}</dd></div>
             </dl>
@@ -2803,8 +2805,8 @@ function DetalleSocioModal({
               <p className="admin-empty">Este socio aún no tiene pagos registrados en el sistema.</p>
             ) : (
               <ul className="admin-detalle__list">
-                {pagos.map((p, i) => (
-                  <li key={i}>
+                {pagos.map((p) => (
+                  <li key={p.id}>
                     <span className="admin-detalle__list-label">{p.fecha}</span>
                     <span className="admin-pill admin-pill--method">{p.metodo}</span>
                     <span className="admin-detalle__list-amount">${p.monto.toLocaleString('es-AR')}</span>
@@ -2830,6 +2832,9 @@ function DetalleSocioModal({
           )}
           <button type="button" className="admin-btn admin-btn--ghost" onClick={onResendInvite}>
             ✉ Reenviar invitación
+          </button>
+          <button type="button" className="admin-btn admin-btn--ghost" onClick={onTogglePausa} title={socio.cuota_pausada ? 'Volver a generar cuotas mensuales para este socio' : 'No generar más cuotas mensuales hasta reanudar'}>
+            {socio.cuota_pausada ? '▶ Reanudar cuota' : '⏸ Pausar cuota'}
           </button>
           {socio.estado === 'activo'
             ? <button type="button" className="admin-btn admin-btn--ghost" onClick={onDesactivar}>Desactivar</button>
@@ -2857,17 +2862,19 @@ function NewSocioModal({ onClose, onCreate }) {
   };
   useEffect(() => {
     document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = ''; };
-  }, []);
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => { document.body.style.overflow = ''; window.removeEventListener('keydown', onKey); };
+  }, [onClose]);
   return (
-    <div className="modal" onClick={onClose} role="dialog" aria-modal="true">
+    <div className="modal" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="newSocioTitle">
       <div className="modal__box modal__box--wide" onClick={(e) => e.stopPropagation()}>
         <button type="button" className="modal__close" onClick={onClose} aria-label="Cerrar">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
         <div className="modal__header">
           <img src="/media/logo.jpeg" alt="AC" className="modal__logo" />
-          <h2>Cargar socio nuevo</h2>
+          <h2 id="newSocioTitle">Cargar socio nuevo</h2>
           <p>Le va a llegar un mail con un link para que ponga su contraseña y entre al portal.</p>
         </div>
         <form onSubmit={submit} className="modal__form modal__form--grid">
@@ -2918,12 +2925,12 @@ function NewSocioModal({ onClose, onCreate }) {
 function EditSocioModal({ socio, onClose, onSave }) {
   const [form, setForm] = useState({
     nombre: socio.nombre || '',
-    dni: '',
+    dni: socio.dni || '',
     telefono: socio.telefono || '',
     dorsal: socio.dorsal || '',
     categoria: socio.categoria || '',
     cuota_monto: socio.cuota_monto != null ? String(socio.cuota_monto) : '',
-    numero_socio: socio.socio_id && !socio.socio_id.includes('-') ? '' : (socio.socio_id || '')
+    numero_socio: socio.numero_socio || ''
   });
   const [err, setErr] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -2942,13 +2949,13 @@ function EditSocioModal({ socio, onClose, onSave }) {
     return () => { document.body.style.overflow = ''; window.removeEventListener('keydown', onKey); };
   }, [onClose]);
   return (
-    <div className="modal" onClick={onClose} role="dialog" aria-modal="true">
+    <div className="modal" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="editSocioTitle">
       <div className="modal__box modal__box--wide" onClick={(e) => e.stopPropagation()}>
         <button type="button" className="modal__close" onClick={onClose} aria-label="Cerrar">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
         <div className="modal__header">
-          <h2>Editar socio</h2>
+          <h2 id="editSocioTitle">Editar socio</h2>
           <p>{socio.email || 'Sin email'}</p>
         </div>
         <form onSubmit={submit} className="modal__form modal__form--grid">
@@ -2958,7 +2965,7 @@ function EditSocioModal({ socio, onClose, onSave }) {
           </div>
           <div className="modal__field">
             <label>DNI</label>
-            <input name="dni" value={form.dni} onChange={onChange} maxLength={10} inputMode="numeric" placeholder={socio.dni || 'Sin cargar'} />
+            <input name="dni" value={form.dni} onChange={onChange} maxLength={11} inputMode="numeric" placeholder="Sin puntos" />
           </div>
           <div className="modal__field">
             <label>Teléfono</label>
@@ -3023,17 +3030,19 @@ function NuevaCuotaModal({ socio, onClose, onCreate, defaultMonto = 15000 }) {
   };
   useEffect(() => {
     document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = ''; };
-  }, []);
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => { document.body.style.overflow = ''; window.removeEventListener('keydown', onKey); };
+  }, [onClose]);
   const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
   return (
-    <div className="modal" onClick={onClose} role="dialog" aria-modal="true">
+    <div className="modal" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="nuevaCuotaTitle">
       <div className="modal__box" onClick={(e) => e.stopPropagation()}>
         <button type="button" className="modal__close" onClick={onClose} aria-label="Cerrar">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
         <div className="modal__header">
-          <h2>Agregar cuota manual</h2>
+          <h2 id="nuevaCuotaTitle">Agregar cuota manual</h2>
           <p>{socio.nombre} — para multas, inscripciones o ajustes one-off.</p>
         </div>
         <form onSubmit={submit} className="modal__form modal__form--grid">
@@ -3575,17 +3584,10 @@ function JoinUs() {
     if (Object.keys(errs).length) { setErrors(errs); return; }
 
     setSubmitting(true);
-    const safe = {
-      nombre: sanitizeText(form.nombre),
-      email: sanitizeText(form.email),
-      telefono: sanitizeText(form.telefono),
-      categoria: sanitizeText(form.categoria),
-      experiencia: sanitizeText(form.experiencia),
-      mensaje: sanitizeText(form.mensaje)
-    };
-
+    // Form de "Sumate" — placeholder. La integración real (mail al club o tabla
+    // de solicitudes en Supabase) se conecta acá tomando los valores de `form`
+    // saneados con sanitizeText.
     setTimeout(() => {
-      console.log('[AC] Datos seguros:', safe);
       setStatus('success');
       setForm(EMPTY);
       setSubmitting(false);
@@ -3906,20 +3908,24 @@ export default function App() {
     return () => { observer.disconnect(); clearTimeout(t); clearTimeout(t2); };
   }, [session, mode]);
 
+  // Marca body.is-demo cuando estamos en modo demo (la CSS empuja la navbar
+  // debajo del banner para que no se superpongan).
+  useEffect(() => {
+    if (DEMO_MODE) document.body.classList.add('is-demo');
+    return () => document.body.classList.remove('is-demo');
+  }, []);
+
   const applyLogin = (res) => {
     if (res.role === 'admin') {
       setMode('admin');
       setSession(null);
-      clearSession();
       setTimeout(() => {
         const el = document.getElementById('admin');
         if (el) el.scrollIntoView({ behavior: 'smooth' });
       }, 150);
     } else {
-      const fresh = { user: res.user, cuotas: res.cuotas, config: res.config };
       setMode('jugador');
-      setSession(fresh);
-      saveSession(fresh);
+      setSession({ user: res.user, cuotas: res.cuotas, config: res.config });
       setTimeout(() => {
         const el = document.getElementById('portal');
         if (el) el.scrollIntoView({ behavior: 'smooth' });
@@ -3934,7 +3940,6 @@ export default function App() {
 
   const handleLogout = async () => {
     await logoutUser();
-    clearSession();
     setSession(null);
     setMode(null);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -3949,12 +3954,7 @@ export default function App() {
   return (
     <>
       {DEMO_MODE && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999,
-          background: '#b45309', color: '#fff', textAlign: 'center',
-          fontSize: '0.78rem', fontWeight: 700, letterSpacing: '0.04em',
-          padding: '0.35rem 1rem'
-        }}>
+        <div className="demo-banner" role="status">
           MODO DEMO — datos de ejemplo (150 socios), nada se guarda. Quitá <code>?demo=1</code> de la URL para volver.
         </div>
       )}
@@ -3977,13 +3977,11 @@ export default function App() {
             config={session.config}
             token={null}
             onSessionUpdate={(updated) => {
-              const fresh = {
+              setSession({
                 user: updated.user,
                 cuotas: updated.cuotas || [],
                 config: updated.config || session.config
-              };
-              setSession(fresh);
-              saveSession(fresh);
+              });
             }}
           />
         )}

@@ -64,19 +64,10 @@ export async function requestPasswordReset(email) {
   return { ok: true, message: 'Si tu email está registrado, te llegará un código en unos minutos.' };
 }
 
-/**
- * Confirma el reset con la contraseña nueva.
- * Con Supabase el flujo es por link en el mail, no por código numérico:
- * el usuario llega al sitio con la sesión ya iniciada (recovery token en la URL)
- * y solo tiene que setear la nueva contraseña.
- */
-export async function confirmPasswordReset(_email, _code, password) {
-  if (!isSupabaseConfigured) return { ok: false, error: 'API_URL_NOT_CONFIGURED' };
-  if (!password || password.length < 8) return { ok: false, error: 'weak_password' };
-  const { error } = await supabase.auth.updateUser({ password });
-  if (error) return { ok: false, error: 'invalid_code' };
-  return { ok: true, message: 'Contraseña actualizada. Ya podés ingresar.' };
-}
+// El reset de contraseña con Supabase es por link en el mail: el usuario llega
+// al sitio con ?type=recovery y la sesión ya iniciada; SetPasswordModal hace
+// supabase.auth.updateUser({ password }) directamente. No hay un confirmReset
+// por código numérico — esa pieza no existe en este flujo.
 
 // ============================================================
 // Pagos (MP) — stubs hasta que se implemente la Edge Function

@@ -63,16 +63,39 @@ Deno.serve(async (req) => {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json({ error: 'invalid_email' }, 400);
     if (!isResend && !nombre) return json({ error: 'missing_fields' }, 400);
 
+    // Normalizar DNI a solo dígitos
+    const dni = body.dni ? String(body.dni).replace(/\D/g, '') : '';
+    const numeroSocio = body.numero_socio ? String(body.numero_socio).trim() : '';
+
+    const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE);
+
+    // 2.5. Si viene DNI o número de socio, chequear unicidad antes de invitar.
+    // Si dejamos que falle el trigger handle_new_user por la unique constraint,
+    // queda un auth.user huérfano sin profile.
+    if (!isResend && (dni || numeroSocio)) {
+      const filters: string[] = [];
+      if (dni)          filters.push(`dni.eq.${dni}`);
+      if (numeroSocio)  filters.push(`numero_socio.eq.${numeroSocio}`);
+      const { data: dups, error: dupErr } = await adminClient
+        .from('profiles')
+        .select('dni, numero_socio')
+        .or(filters.join(','));
+      if (dupErr) return json({ error: 'check_failed', detail: dupErr.message }, 500);
+      if (dups && dups.length > 0) {
+        const hitDni  = dni && dups.some((d) => d.dni === dni);
+        const hitNum  = numeroSocio && dups.some((d) => d.numero_socio === numeroSocio);
+        return json({ error: hitDni ? 'dni_duplicado' : (hitNum ? 'numero_socio_duplicado' : 'duplicado') }, 409);
+      }
+    }
+
     const meta: Record<string, unknown> = {};
     if (nombre)            meta.nombre = nombre;
     if (!isResend)         meta.role = 'socio';
-    if (body.dni)          meta.dni = String(body.dni);
+    if (dni)               meta.dni = dni;
     if (body.dorsal != null) meta.dorsal = String(body.dorsal);
     if (body.categoria)    meta.categoria = String(body.categoria);
     if (body.telefono)     meta.telefono = String(body.telefono);
-    if (body.numero_socio) meta.numero_socio = String(body.numero_socio);
-
-    const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE);
+    if (numeroSocio)       meta.numero_socio = numeroSocio;
 
     if (isResend) {
       // Reenviar: si el user no confirmó, generamos un nuevo link de invite.
