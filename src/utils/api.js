@@ -100,16 +100,21 @@ async function loadFullSession() {
   const profile = profileRes.data;
   if (profile.estado === 'desactivado') return { ok: false, error: 'account_deactivated' };
 
+  // Estado financiero real: si tiene al menos una cuota con saldo > 0, está
+  // "con deuda". Sin esto, el portal del socio mostraba "al día" siempre.
+  const cuotas = cuotasRes.data || [];
+  const tieneDeuda = cuotas.some((c) => c.estado !== 'pagado' && Number(c.saldo) > 0);
+
   return {
     ok: true,
     role: profile.role,
-    user: shapeUser(profile, user.email),
-    cuotas: (cuotasRes.data || []).map(shapeCuota),
+    user: shapeUser(profile, user.email, tieneDeuda),
+    cuotas: cuotas.map(shapeCuota),
     config: shapeConfig(configRes.data || [])
   };
 }
 
-function shapeUser(profile, email) {
+function shapeUser(profile, email, tieneDeuda) {
   return {
     socio_id: profile.numero_socio || profile.id,
     profile_id: profile.id,
@@ -120,7 +125,7 @@ function shapeUser(profile, email) {
     telefono: profile.telefono || '',
     fecha_alta: profile.fecha_alta || '',
     estado_cuenta: profile.estado === 'activo' ? 'activo' : 'desactivado',
-    estado: 'al_dia'  // se sobreescribe abajo si hay cuotas pendientes
+    estado: tieneDeuda ? 'con_deuda' : 'al_dia'
   };
 }
 

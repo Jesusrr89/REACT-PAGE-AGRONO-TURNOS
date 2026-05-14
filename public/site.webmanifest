@@ -1,0 +1,14 @@
+{
+  "name": "Club S. y D. Agronomía Central",
+  "short_name": "Agronomía Central",
+  "description": "Club Social y Deportivo de fútbol y futsal en Parque Chas, CABA.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a2472",
+  "theme_color": "#0a2472",
+  "lang": "es-AR",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }
+  ]
+}

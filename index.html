@@ -1,20 +1,102 @@
 <!doctype html>
-<html lang="es">
+<html lang="es-AR">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="referrer" content="strict-origin-when-cross-origin" />
-    <title>Club S. y D. Agronomía Central</title>
-    <meta name="description" content="Club Social y Deportivo Agronomía Central. Fútbol, futsal, instalaciones y coordinador. Parque Chas, CABA." />
+
+    <title>Club S. y D. Agronomía Central — Fútbol y Futsal en Parque Chas, CABA</title>
+    <meta name="description" content="Club Social y Deportivo Agronomía Central. Fútbol y futsal en Parque Chas, CABA. LAAMBA Liga B, 3ra División. Bauness 958. Sumate al club del barrio." />
+    <meta name="author" content="Club S. y D. Agronomía Central" />
+
+    <!-- Canonical (asegúrate de poner el dominio final cuando esté listo) -->
+    <link rel="canonical" href="https://agronomiacentral.com.ar/" />
+
+    <!-- Iconos / PWA -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
     <meta name="theme-color" content="#0a2472" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
+
+    <!-- OpenGraph (preview en WhatsApp / Facebook / etc.) -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Club S. y D. Agronomía Central" />
+    <meta property="og:title" content="Club S. y D. Agronomía Central — Fútbol y Futsal en Parque Chas" />
+    <meta property="og:description" content="El club del barrio. Fútbol, futsal y comunidad desde el corazón de Parque Chas, CABA." />
+    <meta property="og:url" content="https://agronomiacentral.com.ar/" />
+    <meta property="og:image" content="https://agronomiacentral.com.ar/media/og-cover.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Plantel de Agronomía Central" />
+    <meta property="og:locale" content="es_AR" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Club S. y D. Agronomía Central" />
+    <meta name="twitter:description" content="Fútbol y futsal en Parque Chas, CABA. LAAMBA Liga B." />
+    <meta name="twitter:image" content="https://agronomiacentral.com.ar/media/og-cover.jpg" />
+
+    <!-- Geo (SEO local) -->
+    <meta name="geo.region" content="AR-C" />
+    <meta name="geo.placename" content="Parque Chas, CABA" />
+    <meta name="geo.position" content="-34.581;-58.481" />
+    <meta name="ICBM" content="-34.581, -58.481" />
+
+    <!-- Fuentes (solo los pesos realmente usados → menos KB) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Bebas+Neue&family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Bebas+Neue&family=Inter:wght@400;600;800&display=swap" rel="stylesheet" />
+
+    <!-- LCP hint: precargar el poster del Hero -->
+    <link rel="preload" as="image" href="/media/equipo.jpeg" fetchpriority="high" />
+
+    <!-- Datos estructurados Schema.org: SportsClub + LocalBusiness -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SportsClub",
+      "name": "Club Social y Deportivo Agronomía Central",
+      "alternateName": "Agronomía Central",
+      "url": "https://agronomiacentral.com.ar/",
+      "logo": "https://agronomiacentral.com.ar/media/logo.jpeg",
+      "image": "https://agronomiacentral.com.ar/media/equipo.jpeg",
+      "description": "Club Social y Deportivo de fútbol y futsal en Parque Chas, CABA. Participa en LAAMBA Liga B, 3ra División.",
+      "telephone": "+54-11-4524-2225",
+      "sport": ["Futsal", "Fútbol"],
+      "address": {
+        "@type": "PostalAddress",
+        "streetAddress": "Bauness 958",
+        "addressLocality": "Parque Chas",
+        "addressRegion": "CABA",
+        "postalCode": "1431",
+        "addressCountry": "AR"
+      },
+      "geo": {
+        "@type": "GeoCoordinates",
+        "latitude": -34.581,
+        "longitude": -58.481
+      },
+      "openingHoursSpecification": [{
+        "@type": "OpeningHoursSpecification",
+        "dayOfWeek": ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"],
+        "opens": "09:00",
+        "closes": "24:00"
+      }],
+      "memberOf": {
+        "@type": "SportsOrganization",
+        "name": "LAAMBA — Liga Amateur Metropolitana de Baby Fútbol y Futsal"
+      }
+    }
+    </script>
   </head>
   <body>
     <div id="root"></div>
-    <noscript>Este sitio requiere JavaScript.</noscript>
+    <noscript>
+      <h1>Club Social y Deportivo Agronomía Central</h1>
+      <p>Fútbol y futsal en Parque Chas, CABA. Bauness 958. Tel: 4524-2225.
+         Participamos en LAAMBA — Liga B, 3ra División. Este sitio requiere JavaScript
+         para funcionar completo.</p>
+    </noscript>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

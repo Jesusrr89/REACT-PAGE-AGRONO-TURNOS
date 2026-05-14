@@ -54,18 +54,50 @@ Deno.serve(async (req) => {
       return json({ error: 'not_admin' }, 403);
     }
 
-    // 2. Validar payload
+    // 2. Validar payload (defensa en profundidad: el cliente también valida,
+    // pero acá blindamos longitudes y charsets server-side).
     const body = await req.json().catch(() => ({}));
     const email = String(body.email || '').toLowerCase().trim();
     const nombre = String(body.nombre || '').trim();
     const isResend = !!body.resend;
+
     if (!email) return json({ error: 'missing_fields' }, 400);
+    if (email.length > 254) return json({ error: 'invalid_email' }, 400);
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json({ error: 'invalid_email' }, 400);
-    if (!isResend && !nombre) return json({ error: 'missing_fields' }, 400);
+
+    if (!isResend) {
+      if (!nombre) return json({ error: 'missing_fields' }, 400);
+      if (nombre.length < 2 || nombre.length > 80) return json({ error: 'invalid_nombre' }, 400);
+      // Letras unicode + espacios + guiones + apóstrofes + puntos
+      if (!/^[\p{L}\s.\-'’]{2,80}$/u.test(nombre)) return json({ error: 'invalid_nombre' }, 400);
+    }
 
     // Normalizar DNI a solo dígitos
     const dni = body.dni ? String(body.dni).replace(/\D/g, '') : '';
+    if (dni && (dni.length < 7 || dni.length > 9)) return json({ error: 'invalid_dni' }, 400);
+
     const numeroSocio = body.numero_socio ? String(body.numero_socio).trim() : '';
+    if (numeroSocio && !/^[A-Za-z0-9\-]{1,20}$/.test(numeroSocio)) {
+      return json({ error: 'invalid_numero_socio' }, 400);
+    }
+
+    // dorsal: 1-999
+    let dorsal: number | null = null;
+    if (body.dorsal != null && body.dorsal !== '') {
+      const n = Number(body.dorsal);
+      if (!Number.isInteger(n) || n < 1 || n > 999) return json({ error: 'invalid_dorsal' }, 400);
+      dorsal = n;
+    }
+
+    const categoria = body.categoria ? String(body.categoria).trim().slice(0, 60) : '';
+    if (categoria && !/^[\p{L}0-9\s.\-/]{1,60}$/u.test(categoria)) {
+      return json({ error: 'invalid_categoria' }, 400);
+    }
+
+    const telefono = body.telefono ? String(body.telefono).trim().slice(0, 25) : '';
+    if (telefono && !/^[\d\s+().\-]{6,25}$/.test(telefono)) {
+      return json({ error: 'invalid_telefono' }, 400);
+    }
 
     const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE);
 
@@ -89,13 +121,13 @@ Deno.serve(async (req) => {
     }
 
     const meta: Record<string, unknown> = {};
-    if (nombre)            meta.nombre = nombre;
-    if (!isResend)         meta.role = 'socio';
-    if (dni)               meta.dni = dni;
-    if (body.dorsal != null) meta.dorsal = String(body.dorsal);
-    if (body.categoria)    meta.categoria = String(body.categoria);
-    if (body.telefono)     meta.telefono = String(body.telefono);
-    if (numeroSocio)       meta.numero_socio = numeroSocio;
+    if (nombre)         meta.nombre = nombre;
+    if (!isResend)      meta.role = 'socio';
+    if (dni)            meta.dni = dni;
+    if (dorsal != null) meta.dorsal = String(dorsal);
+    if (categoria)      meta.categoria = categoria;
+    if (telefono)       meta.telefono = telefono;
+    if (numeroSocio)    meta.numero_socio = numeroSocio;
 
     if (isResend) {
       // Reenviar: si el user no confirmó, generamos un nuevo link de invite.

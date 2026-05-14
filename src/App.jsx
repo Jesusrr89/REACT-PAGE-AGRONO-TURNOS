@@ -1603,7 +1603,7 @@ function PortalAdmin({ onLogout }) {
     if (!socio) return;
     if (DEMO_MODE) { setSocios((p) => p.map((s) => s.socio_id === sid ? { ...s, estado: 'desactivado' } : s)); return showToast('Socio desactivado (demo)'); }
     const { error } = await supabase.from('profiles').update({ estado: 'desactivado' }).eq('id', socio.profile_id);
-    if (error) return showToast('Error: ' + error.message);
+    if (error) return showToast(friendlyError(error));
     setSocios((p) => p.map((s) => s.socio_id === sid ? { ...s, estado: 'desactivado' } : s));
     showToast('Socio desactivado');
   };
@@ -1613,7 +1613,7 @@ function PortalAdmin({ onLogout }) {
     if (!socio) return;
     if (DEMO_MODE) { setSocios((p) => p.map((s) => s.socio_id === sid ? { ...s, estado: 'activo' } : s)); return showToast('Socio reactivado (demo)'); }
     const { error } = await supabase.from('profiles').update({ estado: 'activo' }).eq('id', socio.profile_id);
-    if (error) return showToast('Error: ' + error.message);
+    if (error) return showToast(friendlyError(error));
     setSocios((p) => p.map((s) => s.socio_id === sid ? { ...s, estado: 'activo' } : s));
     showToast('Socio reactivado');
   };
@@ -1630,7 +1630,7 @@ function PortalAdmin({ onLogout }) {
       return showToast(nueva ? 'Cuota pausada (demo)' : 'Cuota reanudada (demo)');
     }
     const { error } = await supabase.from('profiles').update({ cuota_pausada: nueva }).eq('id', socio.profile_id);
-    if (error) return showToast('Error: ' + error.message);
+    if (error) return showToast(friendlyError(error));
     setSocios((p) => p.map((s) => s.socio_id === sid ? { ...s, cuota_pausada: nueva } : s));
     showToast(nueva ? '✓ Cuota pausada' : '✓ Cuota reanudada');
   };
@@ -1639,6 +1639,7 @@ function PortalAdmin({ onLogout }) {
   const pausarBulk = async (pausar) => {
     const ids = [...selectedIds];
     if (ids.length === 0) return;
+    if (ids.length > 50 && !confirm(`Vas a ${pausar ? 'pausar' : 'reanudar'} la cuota de ${ids.length} socios. ¿Seguro?`)) return;
     if (DEMO_MODE) {
       const set = new Set(ids);
       setSocios((p) => p.map((s) => set.has(s.profile_id) ? { ...s, cuota_pausada: pausar } : s));
@@ -1812,7 +1813,7 @@ function PortalAdmin({ onLogout }) {
       cuota_monto: Number.isFinite(cuotaMontoNum) && cuotaMontoNum > 0 ? cuotaMontoNum : null
     };
     const { error } = await supabase.from('profiles').update(updates).eq('id', editSocio.profile_id);
-    if (error) return showToast('Error: ' + error.message);
+    if (error) return showToast(friendlyError(error));
     showToast('✓ Socio actualizado');
     setEditSocio(null);
     reloadAll();
@@ -1839,6 +1840,7 @@ function PortalAdmin({ onLogout }) {
     const raw = String(bulkMonto).trim();
     const valor = raw === '' ? null : Number(raw);
     if (valor != null && (!Number.isFinite(valor) || valor <= 0)) return showToast('El monto tiene que ser mayor a 0. Para pausar la cuota, usá el botón Pausar.');
+    if (ids.length > 50 && !confirm(`Vas a modificar la cuota de ${ids.length} socios de una vez. ¿Seguro?`)) return;
     if (DEMO_MODE) {
       const set = new Set(ids);
       setSocios((p) => p.map((s) => set.has(s.profile_id) ? { ...s, cuota_monto: valor } : s));
@@ -1989,7 +1991,7 @@ function PortalAdmin({ onLogout }) {
     }));
     const { error } = await supabase.from('cuotas').insert(rows);
     setGenerandoCuotas(false);
-    if (error) return showToast('Error: ' + error.message);
+    if (error) return showToast(friendlyError(error));
     showToast(`✓ Generadas ${faltan.length} cuotas para ${anio}-${String(mes).padStart(2, '0')}`);
     reloadAll();
   };
@@ -2008,7 +2010,7 @@ function PortalAdmin({ onLogout }) {
       }
     });
     if (error || (res && res.error)) {
-      return showToast('Error al reenviar: ' + (res?.error || error?.message || 'desconocido'));
+      return showToast(friendlyError(res?.error || error));
     }
     showToast('✓ Invitación reenviada');
   };
@@ -2063,7 +2065,7 @@ function PortalAdmin({ onLogout }) {
     // Upsert clave por clave en la tabla config.
     const rows = Object.entries(nueva).map(([key, value]) => ({ key, value: String(value ?? '') }));
     const { error } = await supabase.from('config').upsert(rows, { onConflict: 'key' });
-    if (error) return showToast('Error: ' + error.message);
+    if (error) return showToast(friendlyError(error));
     setConfig(nueva);
     showToast('✓ Configuración guardada');
   };
@@ -2077,15 +2079,19 @@ function PortalAdmin({ onLogout }) {
   }, [search, filterEstado, filterCat, tab]);
 
   const categorias = Array.from(new Set(socios.map((s) => s.categoria).filter(Boolean)));
+  // Saca tildes y diacríticos (NFD → eliminar U+0300-U+036F). Así "rodriguez"
+  // matchea "Rodríguez", "gonzalez" → "González", etc.
+  const stripAccents = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '');
   const sociosFiltrados = socios.filter((s) => {
-    const q = search.toLowerCase().trim();
+    const qRaw = search.toLowerCase().trim();
+    const q = stripAccents(qRaw);
     // El DNI guardado ya está normalizado a dígitos: matcheamos la query
     // también normalizada para que "12.345.678" encuentre "12345678".
-    const qDigits = q.replace(/\D/g, '');
+    const qDigits = qRaw.replace(/\D/g, '');
     if (q) {
-      const matchText = s.nombre.toLowerCase().includes(q)
+      const matchText = stripAccents(s.nombre.toLowerCase()).includes(q)
         || s.socio_id.toLowerCase().includes(q)
-        || (s.email || '').toLowerCase().includes(q);
+        || stripAccents((s.email || '').toLowerCase()).includes(q);
       const matchDni = qDigits && (s.dni || '').includes(qDigits);
       if (!matchText && !matchDni) return false;
     }
@@ -2815,8 +2821,8 @@ function DetalleSocioModal({
                       <span className="admin-table__actions">
                         {c.estado !== 'pagado' && parcialFor !== c.id && (
                           <>
-                            <button type="button" className="admin-btn admin-btn--xs admin-btn--ok" onClick={() => handleMarcarPagada(c.id)}>✓ Pagar</button>
-                            <button type="button" className="admin-btn admin-btn--xs admin-btn--ghost" onClick={() => { setParcialFor(c.id); setParcialMonto(''); }}>½ Parcial</button>
+                            <button type="button" className="admin-btn admin-btn--xs admin-btn--ok" onClick={() => handleMarcarPagada(c.id)} disabled={busy}>✓ Pagar</button>
+                            <button type="button" className="admin-btn admin-btn--xs admin-btn--ghost" onClick={() => { setParcialFor(c.id); setParcialMonto(''); }} disabled={busy}>½ Parcial</button>
                           </>
                         )}
                         {parcialFor === c.id && (
@@ -2828,10 +2834,11 @@ function DetalleSocioModal({
                               value={parcialMonto}
                               onChange={(e) => setParcialMonto(e.target.value)}
                               onKeyDown={(e) => { if (e.key === 'Enter') handleParcialSubmit(c.id); }}
+                              disabled={busy}
                               style={{ width: 90, padding: '0.3rem 0.5rem', borderRadius: 6, border: '1px solid #ccc' }}
                             />
-                            <button type="button" className="admin-btn admin-btn--xs admin-btn--ok" onClick={() => handleParcialSubmit(c.id)}>OK</button>
-                            <button type="button" className="admin-btn admin-btn--xs admin-btn--ghost" onClick={() => setParcialFor(null)}>✕</button>
+                            <button type="button" className="admin-btn admin-btn--xs admin-btn--ok" onClick={() => handleParcialSubmit(c.id)} disabled={busy}>OK</button>
+                            <button type="button" className="admin-btn admin-btn--xs admin-btn--ghost" onClick={() => setParcialFor(null)} disabled={busy}>✕</button>
                           </>
                         )}
                       </span>

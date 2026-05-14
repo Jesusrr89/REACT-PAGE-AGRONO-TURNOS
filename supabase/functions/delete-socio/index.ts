@@ -54,10 +54,10 @@ Deno.serve(async (req) => {
       return json({ error: 'not_admin' }, 403);
     }
 
-    // 2. Validar payload
+    // 2. Validar payload — formato UUID v4 estándar (no solo "36 chars de hex/-")
     const body = await req.json().catch(() => ({}));
     const profileId = String(body.profile_id || '').trim();
-    if (!profileId || !/^[0-9a-f-]{36}$/i.test(profileId)) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(profileId)) {
       return json({ error: 'invalid_profile_id' }, 400);
     }
 

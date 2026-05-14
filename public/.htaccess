@@ -4,6 +4,9 @@
 # Subir el contenido de dist/ (incluido este .htaccess) a public_html.
 # ----------------------------------------------------------------------------
 
+# --- No mostrar listado de archivos si entran a /media/ etc. ---
+Options -Indexes
+
 # --- SPA fallback: cualquier ruta que no sea un archivo real -> index.html ---
 <IfModule mod_rewrite.c>
   RewriteEngine On
@@ -21,12 +24,12 @@
 
 # --- Headers de seguridad (mismo CSP que vercel.json / _headers) ---
 <IfModule mod_headers.c>
-  Header always set Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; media-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'; frame-src 'self' https://www.openstreetmap.org; connect-src 'self' https://umfnazhsxwesxdujfeyy.supabase.co wss://umfnazhsxwesxdujfeyy.supabase.co;"
+  Header always set Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; media-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'; frame-src 'self' https://www.openstreetmap.org; connect-src 'self' https://umfnazhsxwesxdujfeyy.supabase.co wss://umfnazhsxwesxdujfeyy.supabase.co; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self';"
   Header always set X-Content-Type-Options "nosniff"
   Header always set X-Frame-Options "DENY"
   Header always set Referrer-Policy "strict-origin-when-cross-origin"
   Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
-  Header always set Permissions-Policy "camera=(), microphone=(), geolocation=()"
+  Header always set Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=(), accelerometer=()"
 </IfModule>
 
 # --- Cache: los assets de Vite llevan hash en el nombre -> cache largo;
