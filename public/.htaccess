@@ -23,12 +23,15 @@ Options -Indexes
 </IfModule>
 
 # --- Headers de seguridad (mismo CSP que vercel.json / _headers) ---
+# El host de Supabase en la CSP lo inyecta Vite al hacer build, leyendo
+# VITE_SUPABASE_URL del .env. No editar a mano en producción — cambia el
+# .env y re-correr `npm run build` (ver vite.config.js).
 <IfModule mod_headers.c>
-  Header always set Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; media-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'; frame-src 'self' https://www.openstreetmap.org; connect-src 'self' https://umfnazhsxwesxdujfeyy.supabase.co wss://umfnazhsxwesxdujfeyy.supabase.co; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self';"
+  Header always set Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; media-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'; frame-src 'self' https://www.openstreetmap.org; connect-src 'self' https://__SUPABASE_HOST__ wss://__SUPABASE_HOST__; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self';"
   Header always set X-Content-Type-Options "nosniff"
   Header always set X-Frame-Options "DENY"
   Header always set Referrer-Policy "strict-origin-when-cross-origin"
-  Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+  Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
   Header always set Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=(), accelerometer=()"
 </IfModule>
 

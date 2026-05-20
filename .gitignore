@@ -9,3 +9,5 @@ dist/
 ac-hostinger.zip
 supabase/.temp/
 supabase/.branches/
+qa-temp/
+.claude/

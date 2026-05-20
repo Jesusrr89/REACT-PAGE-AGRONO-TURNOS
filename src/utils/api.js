@@ -20,18 +20,52 @@ const MES_NOMBRE = [
 // ============================================================
 
 /**
- * Login. Devuelve { ok, user, cuotas, config, role } o { ok:false, error }.
- * Igual que antes, pero ahora `user` viene de profiles y la sesión la
- * persiste el cliente de Supabase automáticamente.
+ * Login dual: detecta si el identificador es email o DNI y elige el camino.
+ *  - Si tiene '@': es admin (o jugador que tiene email registrado) → login
+ *    directo con signInWithPassword.
+ *  - Si son solo dígitos: es jugador con DNI → resolvemos el email vía RPC
+ *    get_email_by_dni y de ahí signInWithPassword.
+ *
+ * El admin sigue ingresando con su email + password de siempre (sin tocar).
+ * Los jugadores entran con DNI; la primera vez el profile trae
+ * must_change_password=true y App.jsx fuerza el cambio antes de mostrar el
+ * portal.
  */
-export async function loginUser(email, password) {
+export async function loginUser(identifier, password) {
   if (!isSupabaseConfigured) return { ok: false, error: 'API_URL_NOT_CONFIGURED' };
+
+  const id = String(identifier || '').trim().toLowerCase();
+  if (!id) return { ok: false, error: 'missing_credentials' };
+
+  let email;
+  if (id.includes('@')) {
+    email = id;
+  } else {
+    const dniClean = id.replace(/\D/g, '');
+    if (!dniClean || dniClean.length < 7 || dniClean.length > 9) {
+      return { ok: false, error: 'invalid_credentials' };
+    }
+    const { data: resolved, error: rpcErr } = await supabase.rpc('get_email_by_dni', { p_dni: dniClean });
+    if (rpcErr || !resolved) return { ok: false, error: 'invalid_credentials' };
+    email = resolved;
+  }
 
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) return { ok: false, error: mapAuthError(error) };
   if (!data.user) return { ok: false, error: 'invalid_credentials' };
 
   return await loadFullSession();
+}
+
+/**
+ * Marca must_change_password=false en el profile del usuario logueado.
+ * Se llama después de que el socio cambia su contraseña inicial.
+ */
+export async function clearMustChangePassword() {
+  if (!isSupabaseConfigured) return { ok: false, error: 'API_URL_NOT_CONFIGURED' };
+  const { error } = await supabase.rpc('clear_must_change_password');
+  if (error) return { ok: false, error: 'server_error' };
+  return { ok: true };
 }
 
 export async function logoutUser() {
@@ -50,24 +84,9 @@ export async function refreshSession(_token) {
   return await loadFullSession();
 }
 
-/**
- * Pide reset de contraseña. Supabase manda un mail con un link al sitio.
- */
-export async function requestPasswordReset(email) {
-  if (!isSupabaseConfigured) return { ok: false, error: 'API_URL_NOT_CONFIGURED' };
-  const redirect = (typeof window !== 'undefined')
-    ? window.location.origin + window.location.pathname + '?reset=1'
-    : undefined;
-  const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: redirect });
-  // Mensaje genérico siempre (anti-enumeration)
-  if (error) console.warn('[AC] resetPasswordForEmail:', error.message);
-  return { ok: true, message: 'Si tu email está registrado, te llegará un código en unos minutos.' };
-}
-
-// El reset de contraseña con Supabase es por link en el mail: el usuario llega
-// al sitio con ?type=recovery y la sesión ya iniciada; SetPasswordModal hace
-// supabase.auth.updateUser({ password }) directamente. No hay un confirmReset
-// por código numérico — esa pieza no existe en este flujo.
+// Nota: el reset de contraseña NO se hace desde el lado del socio. El admin
+// usa el botón "Resetear contraseña a DNI" en el detalle del socio, que llama
+// a invite-socio (resend) y deja al socio con pass=DNI + must_change_password.
 
 // ============================================================
 // Pagos (MP) — stubs hasta que se implemente la Edge Function
@@ -120,12 +139,14 @@ function shapeUser(profile, email, tieneDeuda) {
     profile_id: profile.id,
     email,
     nombre: profile.nombre,
+    dni: profile.dni || '',
     dorsal: profile.dorsal != null ? String(profile.dorsal) : '',
     categoria: profile.categoria || '',
     telefono: profile.telefono || '',
     fecha_alta: profile.fecha_alta || '',
     estado_cuenta: profile.estado === 'activo' ? 'activo' : 'desactivado',
-    estado: tieneDeuda ? 'con_deuda' : 'al_dia'
+    estado: tieneDeuda ? 'con_deuda' : 'al_dia',
+    must_change_password: !!profile.must_change_password
   };
 }
 
@@ -217,8 +238,8 @@ export function buildCartWhatsappLink(config, user, cartItems) {
 
 export function describeError(code) {
   switch (code) {
-    case 'invalid_credentials':   return 'Email o contraseña incorrectos.';
-    case 'missing_credentials':   return 'Completá email y contraseña.';
+    case 'invalid_credentials':   return 'Credenciales incorrectas. Revisá tu DNI/email y contraseña.';
+    case 'missing_credentials':   return 'Completá tu DNI o email y la contraseña.';
     case 'invalid_input':         return 'Datos inválidos.';
     case 'too_many_attempts':     return 'Demasiados intentos. Esperá unos minutos.';
     case 'invalid_token':         return 'Tu sesión expiró. Volvé a ingresar.';

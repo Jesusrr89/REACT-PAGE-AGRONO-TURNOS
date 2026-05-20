@@ -2,18 +2,25 @@
 //
 // Llama el panel admin para crear un socio nuevo:
 //   POST /functions/v1/invite-socio
-//   Body: { email, nombre, dni, dorsal, categoria, telefono, numero_socio }
+//   Body: { nombre, dni, dorsal, categoria, telefono }
 //
 // Lo que hace:
 //  1. Valida que quien llama esté logueado y tenga role='admin' en profiles.
-//  2. Usa el SERVICE_ROLE para invitar al socio (auth.admin.inviteUserByEmail).
-//     Esto crea el auth.user, dispara nuestro trigger handle_new_user que crea
-//     la fila en profiles, y manda un mail al socio con un link para que ponga
-//     su contraseña.
+//  2. NO se le pide email al admin: el sistema genera un email sintético
+//     (dni-XXXX@ac.local) que solo se usa internamente como identificador
+//     para Supabase Auth. El socio nunca lo ve ni lo usa.
+//  3. Usa el SERVICE_ROLE para crear el auth.user con password = DNI y email
+//     ya confirmado (auth.admin.createUser). El trigger handle_new_user crea
+//     la fila en profiles con must_change_password=true. El socio se loguea
+//     con DNI/DNI y en el primer ingreso la app lo fuerza a elegir una
+//     contraseña real.
+//  4. Si viene resend=true, resetea la pass al DNI vigente y vuelve a poner
+//     must_change_password=true (sirve cuando el socio se olvida la pass y
+//     el admin lo destraba).
 //
 // Por qué no se hace desde el cliente:
-//  - inviteUserByEmail requiere SERVICE_ROLE, que NO debe estar en el frontend.
-//  - Edge Functions guardan el SERVICE_ROLE como env var server-side.
+//  - admin.createUser / updateUserById requieren SERVICE_ROLE, que NO debe
+//    estar en el frontend. Edge Functions lo guardan como env var server-side.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 
@@ -57,13 +64,8 @@ Deno.serve(async (req) => {
     // 2. Validar payload (defensa en profundidad: el cliente también valida,
     // pero acá blindamos longitudes y charsets server-side).
     const body = await req.json().catch(() => ({}));
-    const email = String(body.email || '').toLowerCase().trim();
     const nombre = String(body.nombre || '').trim();
     const isResend = !!body.resend;
-
-    if (!email) return json({ error: 'missing_fields' }, 400);
-    if (email.length > 254) return json({ error: 'invalid_email' }, 400);
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json({ error: 'invalid_email' }, 400);
 
     if (!isResend) {
       if (!nombre) return json({ error: 'missing_fields' }, 400);
@@ -72,14 +74,16 @@ Deno.serve(async (req) => {
       if (!/^[\p{L}\s.\-'’]{2,80}$/u.test(nombre)) return json({ error: 'invalid_nombre' }, 400);
     }
 
-    // Normalizar DNI a solo dígitos
+    // Normalizar DNI a solo dígitos. El DNI es la pass inicial: obligatorio.
     const dni = body.dni ? String(body.dni).replace(/\D/g, '') : '';
-    if (dni && (dni.length < 7 || dni.length > 9)) return json({ error: 'invalid_dni' }, 400);
+    if (!dni) return json({ error: 'dni_requerido' }, 400);
+    if (dni.length < 7 || dni.length > 9) return json({ error: 'invalid_dni' }, 400);
 
-    const numeroSocio = body.numero_socio ? String(body.numero_socio).trim() : '';
-    if (numeroSocio && !/^[A-Za-z0-9\-]{1,20}$/.test(numeroSocio)) {
-      return json({ error: 'invalid_numero_socio' }, 400);
-    }
+    // Email siempre sintético desde el DNI. El admin NO carga email, los
+    // socios tampoco lo usan: es solo el identificador que necesita Supabase
+    // Auth para crear el user. Cualquier `body.email` que venga del cliente
+    // se ignora a propósito.
+    const email = `dni-${dni}@ac.local`;
 
     // dorsal: 1-999
     let dorsal: number | null = null;
@@ -101,59 +105,70 @@ Deno.serve(async (req) => {
 
     const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE);
 
-    // 2.5. Si viene DNI o número de socio, chequear unicidad antes de invitar.
-    // Si dejamos que falle el trigger handle_new_user por la unique constraint,
-    // queda un auth.user huérfano sin profile.
-    if (!isResend && (dni || numeroSocio)) {
-      const filters: string[] = [];
-      if (dni)          filters.push(`dni.eq.${dni}`);
-      if (numeroSocio)  filters.push(`numero_socio.eq.${numeroSocio}`);
+    // 2.5. Chequear unicidad de DNI antes de crear, así no queda un auth.user
+    // huérfano si el trigger handle_new_user falla por unique constraint.
+    if (!isResend) {
       const { data: dups, error: dupErr } = await adminClient
         .from('profiles')
-        .select('dni, numero_socio')
-        .or(filters.join(','));
+        .select('dni')
+        .eq('dni', dni);
       if (dupErr) return json({ error: 'check_failed', detail: dupErr.message }, 500);
       if (dups && dups.length > 0) {
-        const hitDni  = dni && dups.some((d) => d.dni === dni);
-        const hitNum  = numeroSocio && dups.some((d) => d.numero_socio === numeroSocio);
-        return json({ error: hitDni ? 'dni_duplicado' : (hitNum ? 'numero_socio_duplicado' : 'duplicado') }, 409);
+        return json({ error: 'dni_duplicado' }, 409);
       }
     }
 
-    const meta: Record<string, unknown> = {};
+    const meta: Record<string, unknown> = { dni };
     if (nombre)         meta.nombre = nombre;
-    if (!isResend)      meta.role = 'socio';
-    if (dni)            meta.dni = dni;
+    if (!isResend) {
+      meta.role = 'socio';
+      meta.must_change_password = true;
+    }
     if (dorsal != null) meta.dorsal = String(dorsal);
     if (categoria)      meta.categoria = categoria;
     if (telefono)       meta.telefono = telefono;
-    if (numeroSocio)    meta.numero_socio = numeroSocio;
 
     if (isResend) {
-      // Reenviar: si el user no confirmó, generamos un nuevo link de invite.
-      const { data: linkData, error: linkErr } = await adminClient.auth.admin.generateLink({
-        type: 'invite',
-        email
+      // Resetear pass al DNI y volver a forzar cambio en próximo ingreso.
+      // 1) Buscar el auth.user via profiles (más robusto que listUsers, que
+      // está paginado y rompe en clubes con >N socios). El admin client ignora RLS.
+      const { data: profileRow, error: profErr } = await adminClient
+        .from('profiles')
+        .select('id')
+        .eq('email', email)
+        .single();
+      if (profErr || !profileRow) return json({ error: 'user_not_found' }, 404);
+
+      // 2) Reset pass = DNI.
+      const { error: updErr } = await adminClient.auth.admin.updateUserById(profileRow.id, {
+        password: dni,
+        email_confirm: true
       });
-      if (linkErr) return json({ error: linkErr.message }, 400);
-      // generateLink no manda el mail por sí solo en algunos modos. inviteUserByEmail
-      // con un user existente que no confirmó vuelve a mandar mail — usémoslo de fallback.
-      const { error: invErr } = await adminClient.auth.admin.inviteUserByEmail(email, { data: meta });
-      if (invErr && !String(invErr.message).toLowerCase().includes('already')) {
-        return json({ error: invErr.message }, 400);
-      }
-      return json({ ok: true, resent: true, link: linkData?.properties?.action_link });
+      if (updErr) return json({ error: updErr.message }, 400);
+
+      // 3) Volver a marcar must_change_password.
+      const { error: profUpdErr } = await adminClient
+        .from('profiles')
+        .update({ must_change_password: true })
+        .eq('id', profileRow.id);
+      if (profUpdErr) return json({ error: profUpdErr.message }, 500);
+
+      return json({ ok: true, resent: true });
     }
 
-    // 3. Crear nuevo (primer invite)
-    const { data: inviteData, error: inviteErr } = await adminClient.auth.admin.inviteUserByEmail(email, {
-      data: meta
+    // 3. Crear nuevo: password inicial = DNI, email ya confirmado.
+    // El trigger handle_new_user crea la fila en profiles con must_change_password=true.
+    const { data: created, error: createErr } = await adminClient.auth.admin.createUser({
+      email,
+      password: dni,
+      email_confirm: true,
+      user_metadata: meta
     });
-    if (inviteErr) {
-      return json({ error: inviteErr.message }, 400);
+    if (createErr) {
+      return json({ error: createErr.message }, 400);
     }
 
-    return json({ ok: true, user_id: inviteData?.user?.id });
+    return json({ ok: true, user_id: created?.user?.id });
   } catch (err) {
     return json({ error: 'server_error', detail: String(err) }, 500);
   }
